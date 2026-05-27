@@ -7,7 +7,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
 import json
-
+from openpyxl import load_workbook
+from openpyxl.drawing.image import Image as ExcelImage
+from PIL import Image as PILImage
+import smtplib
+from email.message import EmailMessage
+from urllib.parse import urlparse
+from io import BytesIO
 load_dotenv()
 
 app = Flask(__name__)
@@ -19,6 +25,11 @@ LOCATION_ID = os.getenv("GHL_LOCATION_ID")
 PIPELINE_ID = os.getenv("PIPELINE_ID")
 STAGE_FORM_1 = os.getenv("STAGE_FORM_1_COMPLETADO")
 STAGE_FORM_2 = os.getenv("STAGE_FORM_2_COMPLETADO")
+SMTP_SERVER = os.getenv("SMTP_SERVER")
+SMTP_PORT = os.getenv("SMTP_PORT")
+EMAIL_EMISOR = os.getenv("EMAIL_EMISOR")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_DESTINO = os.getenv("EMAIL_DESTINO")
 
 HEADERS_GHL = {
     "Authorization": f"Bearer {GHL_TOKEN}",
@@ -31,6 +42,480 @@ USERS_GHL = {
     "YASMIN": "bVGkAziqy6vwDoFbqvr6",
     "STEFANO_BO": "6u8iZhDXnxp0xSp7XfDl"
 }
+
+RUTA_PLANTILLA_FICHA_DATOS = "plantillas/Ficha de Datos NOMBRE DEL PROYECTO.xlsx"
+CARPETA_SALIDAS = "salidas"
+
+os.makedirs(CARPETA_SALIDAS, exist_ok=True)
+CARPETA_TEMP = "temp"
+os.makedirs(CARPETA_TEMP, exist_ok=True)
+
+ARCHIVO_CACHE_FICHAS = "cache_fichas_datos.json"
+
+
+def normalizar_clave_proyecto(nombre):
+    return str(nombre or "").strip().upper()
+
+
+def cargar_cache_fichas():
+    if not os.path.exists(ARCHIVO_CACHE_FICHAS):
+        return {}
+
+    try:
+        with open(ARCHIVO_CACHE_FICHAS, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+def guardar_cache_fichas(cache):
+    with open(ARCHIVO_CACHE_FICHAS, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def guardar_datos_ficha_en_cache(nombre_proyecto, opp_id, contact_id, datos):
+    cache = cargar_cache_fichas()
+
+    clave_nombre = normalizar_clave_proyecto(nombre_proyecto)
+
+    datos_guardar = dict(datos)
+    datos_guardar["_opp_id"] = opp_id
+    datos_guardar["_contact_id"] = contact_id
+    datos_guardar["_nombre_proyecto"] = clave_nombre
+    datos_guardar["_guardado_en"] = datetime.now().isoformat()
+
+    if clave_nombre:
+        cache[f"nombre::{clave_nombre}"] = datos_guardar
+
+    if opp_id:
+        cache[f"opp::{opp_id}"] = datos_guardar
+
+    if contact_id:
+        cache[f"contact::{contact_id}"] = datos_guardar
+
+    guardar_cache_fichas(cache)
+
+    print(f"💾 [CACHE FICHA] Datos guardados para: {clave_nombre}")
+
+
+def recuperar_datos_ficha_de_cache(data):
+    cache = cargar_cache_fichas()
+
+    opp_id = data.get("id")
+    contact_id = data.get("contact_id") or data.get("contact", {}).get("id")
+    nombre = data.get("cf_nombre_proyecto") or data.get("opportunity_name")
+    clave_nombre = normalizar_clave_proyecto(nombre)
+
+    posibles_claves = []
+
+    if opp_id:
+        posibles_claves.append(f"opp::{opp_id}")
+
+    if contact_id:
+        posibles_claves.append(f"contact::{contact_id}")
+
+    if clave_nombre:
+        posibles_claves.append(f"nombre::{clave_nombre}")
+
+    for clave in posibles_claves:
+        if clave in cache:
+            print(f"✅ [CACHE FICHA] Datos recuperados usando clave: {clave}")
+
+            datos_cache = cache[clave]
+
+            # Mezclamos: lo del cache manda, pero conservamos ids actuales del webhook final
+            data_mezclada = dict(data)
+            data_mezclada.update(datos_cache)
+
+            data_mezclada["id"] = opp_id or datos_cache.get("_opp_id")
+            data_mezclada["contact_id"] = contact_id or datos_cache.get("_contact_id")
+
+            return data_mezclada
+
+    print("⚠️ [CACHE FICHA] No se encontraron datos completos en cache.")
+    return data
+def escribir_excel(ws, celda, valor):
+    if valor is None:
+        return
+
+    valor = str(valor).strip()
+    if valor == "":
+        return
+
+    ws[celda] = valor.upper()
+
+
+def marcar_excel(ws, celda, condicion):
+    if condicion:
+        ws[celda] = "X"
+def obtener_primera_url(valor):
+    """
+    GHL puede mandar la foto como lista o como texto.
+    Esta función devuelve solo la primera URL.
+    """
+    if not valor:
+        return ""
+
+    if isinstance(valor, list) and len(valor) > 0:
+        return valor[0]
+
+    if isinstance(valor, str):
+        return valor
+
+    return ""
+def limpiar_nombre_archivo(nombre):
+    nombre = str(nombre or "archivo")
+    caracteres_invalidos = '<>:"/\\|?*'
+    for c in caracteres_invalidos:
+        nombre = nombre.replace(c, "_")
+    return nombre.strip().replace(" ", "_")
+
+def descargar_imagen(url, nombre_archivo):
+    """
+    Descarga imagen desde GHL documents/download usando PIT token.
+    Convierte cualquier imagen a JPG estándar para evitar errores tipo .mpo en Excel.
+    """
+    if not url:
+        print("⚠️ No llegó URL de imagen.")
+        return None
+
+    try:
+        nombre_archivo = limpiar_nombre_archivo(nombre_archivo)
+
+        headers = {
+            "Authorization": f"Bearer {GHL_TOKEN}",
+            "Version": "2021-04-15",
+            "Accept": "*/*"
+        }
+
+        print(f"📸 Intentando descargar imagen GHL: {url}")
+
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=30,
+            allow_redirects=True
+        )
+
+        print("📸 Status descarga imagen:", response.status_code)
+        print("📸 Content-Type:", response.headers.get("Content-Type"))
+
+        if response.status_code != 200:
+            print("❌ Error descargando imagen:")
+            print(response.text[:500])
+            return None
+
+        # Convertimos SIEMPRE a JPG estándar
+        imagen = PILImage.open(BytesIO(response.content))
+
+        # Algunos archivos vienen como MPO/JPEG raro.
+        # Convertimos a RGB para que Excel/openpyxl lo acepte.
+        if imagen.mode in ("RGBA", "P"):
+            imagen = imagen.convert("RGB")
+        else:
+            imagen = imagen.convert("RGB")
+
+        ruta = os.path.join(CARPETA_TEMP, f"{nombre_archivo}.jpg")
+
+        imagen.save(ruta, format="JPEG", quality=90)
+
+        print(f"✅ Imagen descargada y convertida correctamente: {ruta}")
+        return ruta
+
+    except Exception as e:
+        print(f"❌ Error descargando/convirtiendo imagen GHL: {e}")
+        return None
+
+def insertar_imagen_excel(ws, ruta_imagen, celda, ancho=330, alto=260):
+    if not ruta_imagen:
+        print(f"⚠️ No hay imagen para insertar en {celda}")
+        return
+
+    if not os.path.exists(ruta_imagen):
+        print(f"⚠️ No existe la imagen local: {ruta_imagen}")
+        return
+
+    try:
+        img = ExcelImage(ruta_imagen)
+        img.width = ancho
+        img.height = alto
+        ws.add_image(img, celda)
+        print(f"✅ Imagen insertada en Excel: {ruta_imagen} -> {celda}")
+    except Exception as e:
+        print(f"❌ Error insertando imagen en Excel: {e}")      
+
+
+def generar_excel_ficha_datos(datos):
+    wb = load_workbook(RUTA_PLANTILLA_FICHA_DATOS)
+    ws = wb["Ficha"]
+
+    # DATOS GENERALES
+    escribir_excel(ws, "C5", datos.get("nombre_proyecto"))
+
+    # Tipo de proyecto
+    tipo_proyecto = datos.get("tipo_proyecto", "").upper()
+    marcar_excel(ws, "E8", tipo_proyecto == "NUEVO PREDIO")
+    marcar_excel(ws, "I8", tipo_proyecto == "AMPLIACION DE TORRE")
+
+    # Fuente / origen
+    fuente = datos.get("fuente_origen", "").upper()
+    marcar_excel(ws, "E12", fuente == "PROPIO")
+
+    # Clasificación
+    clasificacion = datos.get("clasificacion", "").upper()
+    marcar_excel(ws, "E16", clasificacion == "CONDOMINIO")
+    marcar_excel(ws, "I16", clasificacion == "EDIFICIO")
+
+    # Tipo construcción
+    tipo_construccion = datos.get("tipo_construccion", "").upper()
+    marcar_excel(ws, "E22", tipo_construccion == "ESTRENO")
+    marcar_excel(ws, "I22", tipo_construccion == "MODERNO")
+    marcar_excel(ws, "L22", tipo_construccion == "ANTIGUO")
+
+    # Fechas
+    escribir_excel(ws, "E23", datos.get("fecha_entrega_edificio"))
+    escribir_excel(ws, "E25", datos.get("fecha_termino_montantes"))
+    escribir_excel(ws, "E26", datos.get("fecha_termino_mecha"))
+
+    # Junta directiva
+    junta = datos.get("junta_directiva", "").upper()
+    marcar_excel(ws, "E31", junta == "SI")
+    marcar_excel(ws, "I31", junta == "NO")
+
+    # Responsable
+    escribir_excel(ws, "D34", datos.get("cargo_responsable"))
+    escribir_excel(ws, "I34", datos.get("nombre_responsable"))
+    escribir_excel(ws, "D35", datos.get("telefono_responsable"))
+    escribir_excel(ws, "I35", datos.get("correo_responsable"))
+
+    # Operador actual
+    operador = datos.get("operador_actual", "").upper()
+    marcar_excel(ws, "E39", operador == "MOVISTAR")
+    marcar_excel(ws, "I39", operador == "NUBYX")
+    marcar_excel(ws, "L39", operador == "ENTEL")
+    marcar_excel(ws, "E40", operador == "CLARO")
+    marcar_excel(ws, "I40", operador == "WOW")
+    marcar_excel(ws, "L40", operador == "BITEL")
+    marcar_excel(ws, "E42", operador == "NINGUNO")
+
+    # Visita técnica
+    escribir_excel(ws, "D46", datos.get("visita_inspeccion_tecnica"))
+
+    horario = datos.get("rango_horario_visita", "").upper()
+    marcar_excel(ws, "I46", horario in ["9 AM A 12 AM", "9AM A 12M", "9 AM A 12M"])
+    marcar_excel(ws, "L46", horario == "1 PM A 4 PM")
+
+    # Dirección
+    escribir_excel(ws, "C50", datos.get("departamento"))
+    escribir_excel(ws, "I50", datos.get("provincia"))
+    escribir_excel(ws, "C51", datos.get("distrito"))
+    escribir_excel(ws, "I51", datos.get("urbanizacion"))
+    escribir_excel(ws, "C52", datos.get("codigo_postal"))
+    escribir_excel(ws, "C53", datos.get("tipo_via"))
+    escribir_excel(ws, "C54", datos.get("nombre_via"))
+    escribir_excel(ws, "C55", datos.get("numero_via"))
+    escribir_excel(ws, "C56", datos.get("coordenadas"))
+
+    # Datos técnicos
+    escribir_excel(ws, "C60", datos.get("total_torres"))
+    escribir_excel(ws, "C61", datos.get("total_hogares"))
+
+    # Torre 1
+    escribir_excel(ws, "A63", f"TORRE {datos.get('nombre_torre1', '')}")
+    escribir_excel(ws, "D63", datos.get("pisos_torre1"))
+    escribir_excel(ws, "D64", datos.get("hogares_torre1"))
+
+    # Torre 2
+    escribir_excel(ws, "A66", f"TORRE {datos.get('nombre_torre2', '')}")
+    escribir_excel(ws, "D66", datos.get("pisos_torre2"))
+    escribir_excel(ws, "D67", datos.get("hogares_torre2"))
+
+    # Torre 3
+    escribir_excel(ws, "A69", f"TORRE {datos.get('nombre_torre3', '')}")
+    escribir_excel(ws, "D69", datos.get("pisos_torre3"))
+    escribir_excel(ws, "D70", datos.get("hogares_torre3"))
+
+    # Clientes interesados
+    escribir_excel(ws, "C77", datos.get("clientes_interesados"))
+
+    # Canal
+    escribir_excel(ws, "C81", datos.get("nombre_canal"))
+
+    # Gestor
+    escribir_excel(ws, "C84", datos.get("gestor"))
+    escribir_excel(ws, "I84", datos.get("celular_gestor"))
+
+    # Fotos - insertar imágenes reales descargadas desde GHL
+    insertar_imagen_excel(
+        ws,
+        datos.get("foto_edificio_path"),
+        "A89",
+        ancho=330,
+        alto=260
+    )
+
+    insertar_imagen_excel(
+        ws,
+        datos.get("foto_montantes_path"),
+        "F89",
+        ancho=330,
+        alto=260
+    )
+
+    nombre_proyecto = limpiar_nombre_archivo(datos.get("nombre_proyecto", "PROYECTO")).replace("_", " ")
+    nombre_archivo = f"Ficha de Datos - {nombre_proyecto}.xlsx"
+    ruta_salida = os.path.join(CARPETA_SALIDAS, nombre_archivo)
+
+    wb.save(ruta_salida)
+    return ruta_salida
+
+def enviar_correo_ficha_datos_win(archivo_excel, datos):
+    proyecto = datos.get("nombre_proyecto", "PROYECTO")
+
+    asunto = f"Ficha de Datos - {proyecto}"
+
+    cuerpo = f"""
+    Buen día,<br><br>
+
+    Se adjunta la ficha de datos correspondiente al proyecto:<br><br>
+
+    <b>{proyecto}</b><br><br>
+
+    Datos principales:<br>
+    - Distrito: {datos.get("distrito", "")}<br>
+    - Dirección: {datos.get("tipo_via", "")} {datos.get("nombre_via", "")} {datos.get("numero_via", "")}<br>
+    - Responsable: {datos.get("nombre_responsable", "")}<br>
+    - Teléfono: {datos.get("telefono_responsable", "")}<br><br>
+
+    Saludos,<br>
+    Futura
+    """
+
+    msg = EmailMessage()
+    msg["From"] = EMAIL_EMISOR
+    msg["To"] = EMAIL_DESTINO
+    msg["Subject"] = asunto
+
+    msg.set_content(f"Se adjunta la ficha de datos del proyecto {proyecto}.")
+    msg.add_alternative(cuerpo, subtype="html")
+
+    with open(archivo_excel, "rb") as f:
+        contenido_excel = f.read()
+
+    nombre_adjunto = os.path.basename(archivo_excel)
+
+    msg.add_attachment(
+        contenido_excel,
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=nombre_adjunto
+    )
+
+    with smtplib.SMTP_SSL(SMTP_SERVER, int(SMTP_PORT)) as smtp:
+        smtp.login(EMAIL_EMISOR, EMAIL_PASSWORD)
+        smtp.send_message(msg)
+
+    print(f"📧 [FICHA DATOS WIN] Correo enviado con adjunto: {nombre_adjunto}")
+
+from datetime import datetime
+
+
+def formatear_fecha(fecha):
+    """
+    Convierte fechas tipo 2026-09-09 a 09/09/2026.
+    Si viene vacía, retorna vacío.
+    """
+    if not fecha:
+        return ""
+
+    try:
+        return datetime.strptime(str(fecha), "%Y-%m-%d").strftime("%d/%m/%Y")
+    except:
+        return str(fecha)
+
+
+def construir_datos_ficha_desde_webhook(data):
+    """
+    Convierte los campos que manda GHL al formato que usa generar_excel_ficha_datos().
+    """
+
+    datos = {
+        "nombre_proyecto": data.get("cf_nombre_proyecto") or data.get("opportunity_name"),
+
+        "tipo_proyecto": data.get("cf_tipo_proyecto"),
+        "fuente_origen": data.get("cf_fuente_hunting"),
+        "clasificacion": "Condominio" if "condominio" in str(data.get("cf_clasificacion_proyecto", "")).lower() else "Edificio",
+
+        "tipo_construccion": (
+            "Estreno" if "estreno" in str(data.get("cf_tipo_construccion_edificio", "")).lower()
+            else "Moderno" if "moderno" in str(data.get("cf_tipo_construccion_edificio", "")).lower()
+            else "Antiguo" if "antiguo" in str(data.get("cf_tipo_construccion_edificio", "")).lower()
+            else data.get("cf_tipo_construccion_edificio")
+        ),
+
+        "fecha_entrega_edificio": formatear_fecha(
+            data.get("cf_fecha_entrega_edificio_estreno") or data.get("cf_fecha_entrega_edificio")
+        ),
+        "fecha_termino_montantes": formatear_fecha(
+            data.get("cf_fecha_termino_montantes_edificio_estreno")
+        ),
+        "fecha_termino_mecha": formatear_fecha(
+            data.get("cf_fecha_termino_mecha_edificio_estreno")
+        ),
+
+        "junta_directiva": data.get("cf_junta_directiva"),
+        "cargo_responsable": data.get("cf_cargo_responsable_edificio") or data.get("cf_cargo_responsable"),
+        "nombre_responsable": data.get("cf_nombre_responsable_edificio"),
+        "telefono_responsable": data.get("cf_telefono_responsable_edificio"),
+        "correo_responsable": data.get("cf_correo_responsable_edificio"),
+
+        "operador_actual": data.get("cf_operador_actual"),
+
+        "visita_inspeccion_tecnica": formatear_fecha(data.get("cf_visita_inspeccion_tecnica_win")),
+        "rango_horario_visita": data.get("cf_rango_horario_visita_tecnica"),
+
+        "departamento": data.get("cf_departamento_edificio"),
+        "provincia": data.get("cf_provincia_edificio"),
+        "distrito": data.get("cf_distrito"),
+        "urbanizacion": data.get("cf_urbanizacion_edificio"),
+        "codigo_postal": data.get("cf_codigo_postal_edificio"),
+        "tipo_via": data.get("cf_tipo_via"),
+        "nombre_via": data.get("cf_nombre_via"),
+        "numero_via": data.get("cf_numeracion_via"),
+        "coordenadas": data.get("cf_coordenadas"),
+
+        "total_torres": data.get("cf_total_torres_proyecto"),
+        "total_hogares": data.get("cf_total_hogares_proyecto"),
+
+        "nombre_torre1": data.get("cf_nombre_torre1_proyecto"),
+        "pisos_torre1": data.get("cf_pisos_torre1_proyecto"),
+        "hogares_torre1": data.get("cf_hogares_torre1_proyecto"),
+
+        "nombre_torre2": data.get("cf_nombre_torre2_proyecto"),
+        "pisos_torre2": data.get("cf_pisos_torre2_proyecto"),
+        "hogares_torre2": data.get("cf_hogares_torre2_proyecto"),
+
+        "nombre_torre3": data.get("cf_nombre_torre3_proyecto"),
+        "pisos_torre3": data.get("cf_pisos_torre3_proyecto"),
+        "hogares_torre3": data.get("cf_hogares_torre3_proyecto"),
+
+        "clientes_interesados": data.get("cf_cantidad_clientes_interesados"),
+        "nombre_canal": data.get("cf_nombre_cancal_hunting") or data.get("cf_nombre_canal_hunting"),
+
+        "gestor": data.get("cf_gestor_real"),
+        "celular_gestor": data.get("user", {}).get("phone", ""),
+
+        # Fotos que llegan desde GHL
+        "foto_edificio": obtener_primera_url(data.get("cf_foto_edificio")),
+        "foto_montantes": obtener_primera_url(data.get("cf_foto_montantes")),
+    }
+
+    print("📸 [MAPEO] cf_foto_edificio:", data.get("cf_foto_edificio"))
+    print("📸 [MAPEO] cf_foto_montantes:", data.get("cf_foto_montantes"))
+    print("📸 [MAPEO] foto_edificio final:", datos.get("foto_edificio"))
+    print("📸 [MAPEO] foto_montantes final:", datos.get("foto_montantes"))
+
+    return datos
 
 
 def obtener_campo(payload, key):
@@ -48,7 +533,106 @@ def extraer_custom_fields_para_ghl(datos_formulario):
             if k.startswith("cf_") and v is not None and v != "":
                 cf_array.append({"id": k, "value": v})
     return cf_array
+def inyectar_custom_fields_desde_contacto(data):
+    """
+    Si el webhook final llega sin campos personalizados,
+    consulta el contacto en GHL y mete los custom fields dentro de data.
+    """
+    contact_id = data.get("contact_id") or data.get("contact", {}).get("id")
 
+    if not contact_id:
+        print("⚠️ [FICHA DATOS WIN] No llegó contact_id para recuperar custom fields.")
+        return data
+
+    try:
+        print(f"🔎 [FICHA DATOS WIN] Recuperando custom fields del contacto: {contact_id}")
+
+        res_contact = requests.get(
+            f"https://services.leadconnectorhq.com/contacts/{contact_id}",
+            headers=HEADERS_GHL
+        )
+
+        print("🔎 [FICHA DATOS WIN] Status GET contacto:", res_contact.status_code)
+
+        if res_contact.status_code != 200:
+            print("❌ [FICHA DATOS WIN] Error GET contacto:", res_contact.text[:500])
+            return data
+
+        contacto = res_contact.json().get("contact", {})
+        custom_fields = contacto.get("customFields", [])
+
+        for cf in custom_fields:
+            cf_id = cf.get("id")
+            cf_value = cf.get("value")
+
+            if cf_id and cf_value not in [None, ""]:
+                data[cf_id] = cf_value
+
+        print(f"✅ [FICHA DATOS WIN] Custom fields inyectados: {len(custom_fields)}")
+        return data
+
+    except Exception as e:
+        print("❌ [FICHA DATOS WIN] Error recuperando custom fields:", str(e))
+        return data
+@app.route("/webhook-enviar-ficha-datos-win", methods=["POST"])
+def webhook_enviar_ficha_datos_win():
+    try:
+        data = request.get_json(silent=True) or request.form.to_dict()
+
+        # Primero recuperamos la ficha completa guardada desde /webhook-formulario2.
+        # Esto evita que el Excel salga vacío cuando el webhook final llega incompleto.
+        data = recuperar_datos_ficha_de_cache(data)
+
+        print("\n📩 [FICHA DATOS WIN] Webhook recibido")
+        print("=====================================")
+        print("Proyecto:", data.get("cf_nombre_proyecto") or data.get("opportunity_name"))
+        print("Contacto ID:", data.get("contact_id"))
+        print("Oportunidad ID:", data.get("id"))
+        print("=====================================\n")
+
+        datos_excel = construir_datos_ficha_desde_webhook(data)
+
+        nombre_limpio = limpiar_nombre_archivo(
+            datos_excel.get("nombre_proyecto", "proyecto")
+        )
+
+        url_foto_edificio = obtener_primera_url(datos_excel.get("foto_edificio"))
+        url_foto_montantes = obtener_primera_url(datos_excel.get("foto_montantes"))
+
+        print("📸 URL FOTO EDIFICIO:", url_foto_edificio)
+        print("📸 URL FOTO MONTANTES:", url_foto_montantes)
+
+        foto_edificio_path = descargar_imagen(
+            url_foto_edificio,
+            f"{nombre_limpio}_foto_edificio"
+        )
+
+        foto_montantes_path = descargar_imagen(
+            url_foto_montantes,
+            f"{nombre_limpio}_foto_montantes"
+        )
+
+        datos_excel["foto_edificio_path"] = foto_edificio_path
+        datos_excel["foto_montantes_path"] = foto_montantes_path
+
+        archivo_generado = generar_excel_ficha_datos(datos_excel)
+
+        print(f"✅ [FICHA DATOS WIN] Excel generado: {archivo_generado}")
+
+        enviar_correo_ficha_datos_win(archivo_generado, datos_excel)
+
+        return jsonify({
+            "status": "ok",
+            "mensaje": "Excel generado y correo enviado correctamente",
+            "archivo": archivo_generado
+        }), 200
+
+    except Exception as e:
+        print("❌ [FICHA DATOS WIN] Error:", str(e))
+        return jsonify({
+            "status": "error",
+            "mensaje": str(e)
+        }), 500
 
 # =========================================================
 # RUTA 1: EL GÉNESIS (Formulario de Asignación)
@@ -218,10 +802,12 @@ def webhook_formulario2():
     contacto_original_id = oportunidad_correcta.get("contactId")
     custom_fields_nuevos = extraer_custom_fields_para_ghl(datos)
 
-    # 1. ELIMINAR CONTACTO FANTASMA
+    # 1. CONTACTO FANTASMA
+    # OJO: no lo eliminamos todavía porque las fotos del formulario pueden depender de este contacto.
     contacto_fantasma_id = datos.get("contact_id") or datos.get("contact", {}).get("id")
+
     if contacto_fantasma_id and contacto_fantasma_id != contacto_original_id:
-        requests.delete(f"https://services.leadconnectorhq.com/contacts/{contacto_fantasma_id}", headers=HEADERS_GHL)
+      print(f"👻 [FORM 2] Contacto fantasma detectado pero NO eliminado: {contacto_fantasma_id}")
 
     # 2. EXTRACCIÓN Y MAPEO ESPECÍFICO (Responsable y Dirección)
     resp_nombre = obtener_campo(datos, "cf_nombre_responsable_edificio") or ""
@@ -285,6 +871,13 @@ def webhook_formulario2():
             "phone": resp_tel,
             "customFields": custom_fields_nuevos
         }
+    )
+    # Guardar datos completos de la ficha para usarlos después en el Excel final
+    guardar_datos_ficha_en_cache(
+        nombre_proyecto=nombre_proyecto,
+        opp_id=opp_id,
+        contact_id=contacto_original_id,
+        datos=datos
     )
 
     print(f"✅ [FORM 2] Proyecto '{nombre_proyecto}' actualizado. Empresa y Contacto sincronizados.")
