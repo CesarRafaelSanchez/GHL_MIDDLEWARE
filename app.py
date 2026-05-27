@@ -39,7 +39,6 @@ def obtener_campo(payload, key):
     if isinstance(cf, dict) and key in cf: return cf[key]
     return None
 
-
 def extraer_custom_fields_para_ghl(datos_formulario):
     cf_array = []
     fuente = datos_formulario.get("customFields", datos_formulario)
@@ -51,9 +50,13 @@ def extraer_custom_fields_para_ghl(datos_formulario):
 
 
 # =========================================================
-# RUTA 1: EL GÉNESIS (Formulario de Asignación)
+# Fase 2: Solicitud de Asignación
 # =========================================================
-@app.route('/webhook-formulario1', methods=['POST'])
+
+# ---------------------------------------------------------
+# Modulo 1: Envio de Formulario de Asignación/Reasignación
+# =========================================================
+@app.route('/webhook-formulario1-enviado', methods=['POST'])
 def webhook_formulario1():
     datos = request.json
     if not datos:
@@ -182,9 +185,147 @@ def webhook_formulario1():
     print(f"✅ [FORM 1] Setup completado. Asignado a: {'Jean' if owner_id == USERS_GHL['JEAN'] else 'Yasmin'}")
     return jsonify({"status": "success"}), 200
 
+# ---------------------------------------------------------
+# Modulo 2: Envio de Correo de Asignación
+# =========================================================
+# =========================================================
+# 2.1 FUNCIÓN INTERNA: ENVÍO DE CORREO SMTP
+# =========================================================
+def enviar_correo_win(datos_contacto):
+    smtp_server = os.getenv("SMTP_SERVER")
+    smtp_port = int(os.getenv("SMTP_PORT", 465))
+    email_emisor = os.getenv("EMAIL_EMISOR")
+    email_password = os.getenv("EMAIL_PASSWORD")
+    email_destino = os.getenv("EMAIL_DESTINO")
+
+    # Extracción segura de los campos (Priorizando los Custom Fields inyectados)
+    tipo_predio = obtener_campo(datos_contacto, "cf_tipo_edificio") or "EDIFICIO"
+    # Si no hay campo cf_nombre_proyecto, usamos el opportunity_name nativo del webhook
+    nombre_predio = obtener_campo(datos_contacto, "cf_nombre_proyecto") or datos_contacto.get("opportunity_name",
+                                                                                              "NO ESPECIFICADO")
+    tipo_via = obtener_campo(datos_contacto, "cf_tipo_via") or ""
+    nombre_via = obtener_campo(datos_contacto, "cf_nombre_via") or ""
+    direccion = f"{tipo_via} {nombre_via}".strip() or "NO ESPECIFICADO"
+
+    numeracion = obtener_campo(datos_contacto, "cf_numeracion_via") or "No especificado"
+    distrito = obtener_campo(datos_contacto, "cf_distrito") or "NO ESPECIFICADO"
+    coordenadas = obtener_campo(datos_contacto, "cf_coordenadas") or "No especificado"
+    estreno = obtener_campo(datos_contacto, "cf_es_estreno") or "SI"
+    inmobiliaria = obtener_campo(datos_contacto, "cf_inmobiliaria") or "NO ESPECIFICADO"
+
+    # Si no hay cf_ejecutivo, usamos el owner nativo del webhook
+    ejecutivo = obtener_campo(datos_contacto, "cf_ejecutivo_principal") or datos_contacto.get("owner",
+                                                                                              "NO ESPECIFICADO")
+    asignar_reasignar = obtener_campo(datos_contacto, "cf_tipo_gestion") or "ASIGNAR"
+
+    fecha_actual = datetime.now().strftime("%d/%m/%Y")
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f"Solicitud de asignación - {nombre_predio.upper()}"
+    msg['From'] = f"Vertical Futura <{email_emisor}>"
+    msg['To'] = email_destino
+
+    html = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.4;">
+        <p>Estimados,</p>
+        <p>Solicitamos la asignación del predio en mención.</p>
+        <br>
+        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; max-width: 600px; border-color: #cccccc;">
+          <tr style="background-color: #f2f2f2;">
+            <th align="left" style="width: 40%; font-size: 14px;">FORMATO DE ASIGNACION</th>
+            <th style="width: 60%;"></th>
+          </tr>
+          <tr><td><strong>Tipo de Predio:</strong></td><td>{str(tipo_predio).upper()}</td></tr>
+          <tr><td><strong>Nombre del predio:</strong></td><td>{str(nombre_predio).upper()}</td></tr>
+          <tr><td><strong>Direccion:</strong></td><td>{str(direccion).upper()}</td></tr>
+          <tr><td><strong>Numeracion:</strong></td><td>{numeracion}</td></tr>
+          <tr><td><strong>Distrito:</strong></td><td>{str(distrito).upper()}</td></tr>
+          <tr><td><strong>Coordenadas:</strong></td><td>{coordenadas}</td></tr>
+          <tr><td><strong>Cobertura Si/no:</strong></td><td>SI</td></tr>
+          <tr><td><strong>Asignar/Reasignar:</strong></td><td>{str(asignar_reasignar).upper()}</td></tr>
+          <tr><td><strong>Estreno:</strong></td><td>{str(estreno).upper()}</td></tr>
+          <tr><td><strong>Fecha:</strong></td><td>{fecha_actual}</td></tr>
+          <tr><td><strong>Inmobiliaria:</strong></td><td>{str(inmobiliaria).upper()}</td></tr>
+          <tr><td><strong>Ejecutivo:</strong></td><td>{str(ejecutivo).upper()}</td></tr>
+        </table>
+        <p style="margin-top: 25px;">Saludos,</p>
+        <p><strong>Stefano Sotomarino Goche</strong><br>Back Office - Futura</p>
+      </body>
+    </html>
+    """
+    msg.attach(MIMEText(html, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            server.login(email_emisor, email_password)
+            server.sendmail(email_emisor, [email_destino], msg.as_string())
+        print(f"📧 Correo enviado a WIN para: {nombre_predio.upper()}")
+        return True
+    except Exception as e:
+        print(f"❌ Error al enviar el correo a WIN: {e}")
+        return False
+
 
 # =========================================================
-# RUTA 2: LA ACTUALIZACIÓN (Formulario de Ficha de Datos)
+# 2.2 EL AUTO-AVANCE (Envío de Correo y Cambio de Etapa)
+# =========================================================
+@app.route('/webhook--enviar-correo-asignacion', methods=['POST'])
+def webhook_enviar_correo():
+    datos = request.json
+    if not datos: return jsonify({"error": "No data"}), 400
+
+    opp_id = datos.get("id")
+    contact_id = datos.get("contact_id")
+
+    # 1. RECUPERAR LOS CAMPOS PERSONALIZADOS QUE GHL OCULTA EN EL WEBHOOK LIGERO
+    if contact_id:
+        res_contact = requests.get(
+            f"https://services.leadconnectorhq.com/contacts/{contact_id}",
+            headers=HEADERS_GHL
+        )
+        if res_contact.status_code == 200:
+            cfs = res_contact.json().get("contact", {}).get("customFields", [])
+            for cf in cfs:
+                # Inyectamos los campos ocultos directamente en nuestro diccionario de datos
+                datos[cf["id"]] = cf.get("value")
+
+    nombre_proyecto = obtener_campo(datos, "cf_nombre_proyecto") or datos.get("opportunity_name", "Desconocido")
+    print(f"🚀 [FORM 3] Iniciando envío de correo WIN para: {nombre_proyecto}")
+
+    # 2. Enviar el correo SMTP con todos los datos completos
+    correo_enviado = enviar_correo_win(datos)
+
+    # 3. Si el correo sale con éxito, mover la tarjeta automáticamente
+    if correo_enviado and opp_id:
+        STAGE_ESPERANDO = os.getenv("STAGE_ESPERANDO_WIN")
+
+        res_update = requests.put(
+            f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
+            headers=HEADERS_GHL,
+            json={
+                "pipelineId": os.getenv("PIPELINE_ID"),
+                "pipelineStageId": STAGE_ESPERANDO
+            }
+        )
+        if res_update.status_code == 200:
+            print(f"✅ [FORM 3] Tarjeta movida automáticamente a 'Esperando Respuesta WIN'.")
+            return jsonify({"status": "success", "message": "Correo enviado y tarjeta movida"}), 200
+        else:
+            print(f"❌ Error al mover la tarjeta: {res_update.text}")
+            return jsonify({"status": "partial", "message": "Correo enviado pero fallo al mover la tarjeta"}), 500
+
+    elif not correo_enviado:
+        return jsonify({"status": "error", "message": "Fallo el servidor de correos"}), 500
+
+    return jsonify({"status": "error", "message": "Faltan IDs para mover la tarjeta"}), 400
+
+
+# =========================================================
+# Fase 4: Habilitacion de Edificio
+# =========================================================
+# =========================================================
+# Modulo: Envio de Ficha de Datos
 # =========================================================
 @app.route('/webhook-formulario2', methods=['POST'])
 def webhook_formulario2():
@@ -291,138 +432,8 @@ def webhook_formulario2():
     return jsonify({"status": "success"}), 200
 
 
-# =========================================================
-# FUNCIÓN INTERNA: ENVÍO DE CORREO SMTP
-# =========================================================
-def enviar_correo_win(datos_contacto):
-    smtp_server = os.getenv("SMTP_SERVER")
-    smtp_port = int(os.getenv("SMTP_PORT", 465))
-    email_emisor = os.getenv("EMAIL_EMISOR")
-    email_password = os.getenv("EMAIL_PASSWORD")
-    email_destino = os.getenv("EMAIL_DESTINO")
 
-    # Extracción segura de los campos (Priorizando los Custom Fields inyectados)
-    tipo_predio = obtener_campo(datos_contacto, "cf_tipo_edificio") or "EDIFICIO"
-    # Si no hay campo cf_nombre_proyecto, usamos el opportunity_name nativo del webhook
-    nombre_predio = obtener_campo(datos_contacto, "cf_nombre_proyecto") or datos_contacto.get("opportunity_name",
-                                                                                              "NO ESPECIFICADO")
-    tipo_via = obtener_campo(datos_contacto, "cf_tipo_via") or ""
-    nombre_via = obtener_campo(datos_contacto, "cf_nombre_via") or ""
-    direccion = f"{tipo_via} {nombre_via}".strip() or "NO ESPECIFICADO"
-
-    numeracion = obtener_campo(datos_contacto, "cf_numeracion_via") or "No especificado"
-    distrito = obtener_campo(datos_contacto, "cf_distrito") or "NO ESPECIFICADO"
-    coordenadas = obtener_campo(datos_contacto, "cf_coordenadas") or "No especificado"
-    estreno = obtener_campo(datos_contacto, "cf_es_estreno") or "SI"
-    inmobiliaria = obtener_campo(datos_contacto, "cf_inmobiliaria") or "NO ESPECIFICADO"
-
-    # Si no hay cf_ejecutivo, usamos el owner nativo del webhook
-    ejecutivo = obtener_campo(datos_contacto, "cf_ejecutivo_principal") or datos_contacto.get("owner",
-                                                                                              "NO ESPECIFICADO")
-    asignar_reasignar = obtener_campo(datos_contacto, "cf_tipo_gestion") or "ASIGNAR"
-
-    fecha_actual = datetime.now().strftime("%d/%m/%Y")
-
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"Solicitud de asignación - {nombre_predio.upper()}"
-    msg['From'] = f"Vertical Futura <{email_emisor}>"
-    msg['To'] = email_destino
-
-    html = f"""
-    <html>
-      <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.4;">
-        <p>Estimados,</p>
-        <p>Solicitamos la asignación del predio en mención.</p>
-        <br>
-        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; max-width: 600px; border-color: #cccccc;">
-          <tr style="background-color: #f2f2f2;">
-            <th align="left" style="width: 40%; font-size: 14px;">FORMATO DE ASIGNACION</th>
-            <th style="width: 60%;"></th>
-          </tr>
-          <tr><td><strong>Tipo de Predio:</strong></td><td>{str(tipo_predio).upper()}</td></tr>
-          <tr><td><strong>Nombre del predio:</strong></td><td>{str(nombre_predio).upper()}</td></tr>
-          <tr><td><strong>Direccion:</strong></td><td>{str(direccion).upper()}</td></tr>
-          <tr><td><strong>Numeracion:</strong></td><td>{numeracion}</td></tr>
-          <tr><td><strong>Distrito:</strong></td><td>{str(distrito).upper()}</td></tr>
-          <tr><td><strong>Coordenadas:</strong></td><td>{coordenadas}</td></tr>
-          <tr><td><strong>Cobertura Si/no:</strong></td><td>SI</td></tr>
-          <tr><td><strong>Asignar/Reasignar:</strong></td><td>{str(asignar_reasignar).upper()}</td></tr>
-          <tr><td><strong>Estreno:</strong></td><td>{str(estreno).upper()}</td></tr>
-          <tr><td><strong>Fecha:</strong></td><td>{fecha_actual}</td></tr>
-          <tr><td><strong>Inmobiliaria:</strong></td><td>{str(inmobiliaria).upper()}</td></tr>
-          <tr><td><strong>Ejecutivo:</strong></td><td>{str(ejecutivo).upper()}</td></tr>
-        </table>
-        <p style="margin-top: 25px;">Saludos,</p>
-        <p><strong>Stefano Sotomarino Goche</strong><br>Back Office - Futura</p>
-      </body>
-    </html>
-    """
-    msg.attach(MIMEText(html, 'html'))
-
-    try:
-        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
-            server.login(email_emisor, email_password)
-            server.sendmail(email_emisor, [email_destino], msg.as_string())
-        print(f"📧 Correo enviado a WIN para: {nombre_predio.upper()}")
-        return True
-    except Exception as e:
-        print(f"❌ Error al enviar el correo a WIN: {e}")
-        return False
-
-
-# =========================================================
-# RUTA 3: EL AUTO-AVANCE (Envío de Correo y Cambio de Etapa)
-# =========================================================
-@app.route('/webhook--enviar-correo-asignacion', methods=['POST'])
-def webhook_enviar_correo():
-    datos = request.json
-    if not datos: return jsonify({"error": "No data"}), 400
-
-    opp_id = datos.get("id")
-    contact_id = datos.get("contact_id")
-
-    # 1. RECUPERAR LOS CAMPOS PERSONALIZADOS QUE GHL OCULTA EN EL WEBHOOK LIGERO
-    if contact_id:
-        res_contact = requests.get(
-            f"https://services.leadconnectorhq.com/contacts/{contact_id}",
-            headers=HEADERS_GHL
-        )
-        if res_contact.status_code == 200:
-            cfs = res_contact.json().get("contact", {}).get("customFields", [])
-            for cf in cfs:
-                # Inyectamos los campos ocultos directamente en nuestro diccionario de datos
-                datos[cf["id"]] = cf.get("value")
-
-    nombre_proyecto = obtener_campo(datos, "cf_nombre_proyecto") or datos.get("opportunity_name", "Desconocido")
-    print(f"🚀 [FORM 3] Iniciando envío de correo WIN para: {nombre_proyecto}")
-
-    # 2. Enviar el correo SMTP con todos los datos completos
-    correo_enviado = enviar_correo_win(datos)
-
-    # 3. Si el correo sale con éxito, mover la tarjeta automáticamente
-    if correo_enviado and opp_id:
-        STAGE_ESPERANDO = os.getenv("STAGE_ESPERANDO_WIN")
-
-        res_update = requests.put(
-            f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
-            headers=HEADERS_GHL,
-            json={
-                "pipelineId": os.getenv("PIPELINE_ID"),
-                "pipelineStageId": STAGE_ESPERANDO
-            }
-        )
-        if res_update.status_code == 200:
-            print(f"✅ [FORM 3] Tarjeta movida automáticamente a 'Esperando Respuesta WIN'.")
-            return jsonify({"status": "success", "message": "Correo enviado y tarjeta movida"}), 200
-        else:
-            print(f"❌ Error al mover la tarjeta: {res_update.text}")
-            return jsonify({"status": "partial", "message": "Correo enviado pero fallo al mover la tarjeta"}), 500
-
-    elif not correo_enviado:
-        return jsonify({"status": "error", "message": "Fallo el servidor de correos"}), 500
-
-    return jsonify({"status": "error", "message": "Faltan IDs para mover la tarjeta"}), 400
 
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run(port=5001, debug=True)
