@@ -3,6 +3,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
+from email.message import EmailMessage
 
 # Importamos tu herramienta recién creada
 from app.utils.helpers import obtener_campo
@@ -95,3 +96,56 @@ def enviar_correo_win(datos_contacto):
     except Exception as e:
         print(f"❌ Error al enviar el correo a WIN: {e}")
         return False
+
+
+def enviar_correo_ficha_datos_win(archivo_excel, datos):
+    proyecto = datos.get("nombre_proyecto", "PROYECTO")
+    asunto = f"Ficha de Datos - {proyecto}"
+
+    email_emisor = os.getenv("EMAIL_EMISOR")
+    email_destino = os.getenv("EMAIL_DESTINO")
+    email_password = os.getenv("EMAIL_PASSWORD")
+    smtp_server = os.getenv("SMTP_SERVER")
+    smtp_port = int(os.getenv("SMTP_PORT", 465))
+    email_cc = os.getenv("EMAIL_CC_FICHA", "")  # Capturamos tu variable CC
+
+    cuerpo = f"""
+    Buen día,<br><br>
+    Se adjunta la ficha de datos correspondiente al proyecto:<br><br>
+    <b>{proyecto}</b><br><br>
+    Datos principales:<br>
+    - Distrito: {datos.get("distrito", "")}<br>
+    - Dirección: {datos.get("tipo_via", "")} {datos.get("nombre_via", "")} {datos.get("numero_via", "")}<br>
+    - Responsable: {datos.get("nombre_responsable", "")}<br>
+    - Teléfono: {datos.get("telefono_responsable", "")}<br><br>
+    Saludos,<br>
+    Futura
+    """
+
+    msg = EmailMessage()
+    msg["From"] = email_emisor
+    msg["To"] = email_destino
+    msg["Subject"] = asunto
+
+    if email_cc:
+        msg["Cc"] = email_cc
+
+    msg.set_content(f"Se adjunta la ficha de datos del proyecto {proyecto}.")
+    msg.add_alternative(cuerpo, subtype="html")
+
+    with open(archivo_excel, "rb") as f:
+        contenido_excel = f.read()
+
+    nombre_adjunto = os.path.basename(archivo_excel)
+    msg.add_attachment(
+        contenido_excel,
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=nombre_adjunto
+    )
+
+    with smtplib.SMTP_SSL(smtp_server, smtp_port) as smtp:
+        smtp.login(email_emisor, email_password)
+        smtp.send_message(msg)
+
+    print(f"📧 [FICHA DATOS WIN] Correo enviado con adjunto: {nombre_adjunto}")

@@ -4,7 +4,19 @@ from flask import Blueprint, request, jsonify
 
 # Importamos tus herramientas y el servicio de correo modularizados
 from app.utils.helpers import obtener_campo, extraer_custom_fields_para_ghl
-from app.services.email_smtp import enviar_correo_win
+from app.services.email_smtp import enviar_correo_win, enviar_correo_ficha_datos_win
+from app.services.ficha_service import (
+    guardar_datos_ficha_en_cache,
+    recuperar_datos_ficha_de_cache,
+    inyectar_custom_fields_desde_contacto,
+    construir_datos_ficha_desde_webhook,
+    limpiar_nombre_archivo,
+    obtener_primera_url,
+    descargar_imagen,
+    generar_excel_ficha_datos
+)
+
+
 
 # 1. CREAMOS EL BLUEPRINT (La habitación de las rutas)
 webhooks_bp = Blueprint('webhooks', __name__)
@@ -252,4 +264,58 @@ def webhook_formulario2():
     )
 
     print(f"✅ [FORM 2] Proyecto '{nombre_proyecto}' actualizado.")
+
+    # Guardar datos completos de la ficha para usarlos después en el Excel final
+    guardar_datos_ficha_en_cache(
+        nombre_proyecto=nombre_proyecto,
+        opp_id=opp_id,
+        contact_id=contacto_original_id,
+        datos=datos
+    )
+
+    print(f"✅ [FORM 2] Proyecto '{nombre_proyecto}' actualizado. Empresa y Contacto sincronizados.")
     return jsonify({"status": "success"}), 200
+
+
+@webhooks_bp.route("/webhook-enviar-ficha-datos-win", methods=["POST"])
+def webhook_enviar_ficha_datos_win():
+    try:
+        data = request.get_json(silent=True) or request.form.to_dict()
+
+        # 1. Recuperamos lo que haya en caché
+        data = recuperar_datos_ficha_de_cache(data)
+
+        # 2. RECOLECTAMOS LAS FOTOS DESDE GHL (LA MAGIA)
+        data = inyectar_custom_fields_desde_contacto(data)
+
+        print("\n📩 [FICHA DATOS WIN] Webhook recibido")
+        print("=====================================")
+        print("Proyecto:", data.get("cf_nombre_proyecto") or data.get("opportunity_name"))
+        print("=====================================\n")
+
+        datos_excel = construir_datos_ficha_desde_webhook(data)
+        nombre_limpio = limpiar_nombre_archivo(datos_excel.get("nombre_proyecto", "proyecto"))
+
+        url_foto_edificio = obtener_primera_url(datos_excel.get("foto_edificio"))
+        url_foto_montantes = obtener_primera_url(datos_excel.get("foto_montantes"))
+
+        foto_edificio_path = descargar_imagen(url_foto_edificio, f"{nombre_limpio}_foto_edificio")
+        foto_montantes_path = descargar_imagen(url_foto_montantes, f"{nombre_limpio}_foto_montantes")
+
+        datos_excel["foto_edificio_path"] = foto_edificio_path
+        datos_excel["foto_montantes_path"] = foto_montantes_path
+
+        archivo_generado = generar_excel_ficha_datos(datos_excel)
+        print(f"✅ [FICHA DATOS WIN] Excel generado: {archivo_generado}")
+
+        enviar_correo_ficha_datos_win(archivo_generado, datos_excel)
+
+        return jsonify({
+            "status": "ok",
+            "mensaje": "Excel generado y correo enviado correctamente",
+            "archivo": archivo_generado
+        }), 200
+
+    except Exception as e:
+        print("❌ [FICHA DATOS WIN] Error:", str(e))
+        return jsonify({"status": "error", "mensaje": str(e)}), 500
