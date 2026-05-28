@@ -8,16 +8,23 @@ from PIL import Image as PILImage
 from io import BytesIO
 from dotenv import load_dotenv
 
-# Aseguramos que lea el .env para que el Token de GHL no esté vacío al descargar fotos
-load_dotenv()
+#load_dotenv()
 
-CARPETA_SALIDAS = "archivos_datos/salidas"
-CARPETA_TEMP = "archivos_datos/temp"
-ARCHIVO_CACHE_FICHAS = "archivos_datos/cache_fichas_datos.json"
-RUTA_PLANTILLA_FICHA_DATOS = "archivos_datos/plantillas/Ficha de Datos NOMBRE DEL PROYECTO.xlsx"
+# =========================================================
+# RUTAS ABSOLUTAS (A prueba de balas)
+# =========================================================
+# Esto encuentra la ruta de tu proyecto GHL_System automáticamente
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+CARPETA_SALIDAS = os.path.join(BASE_DIR, "archivos_datos", "salidas")
+CARPETA_TEMP = os.path.join(BASE_DIR, "archivos_datos", "temp")
+ARCHIVO_CACHE_FICHAS = os.path.join(BASE_DIR, "archivos_datos", "cache_fichas_datos.json")
+RUTA_PLANTILLA_FICHA_DATOS = os.path.join(BASE_DIR, "archivos_datos", "plantillas", "Ficha de Datos NOMBRE DEL PROYECTO.xlsx")
+
+# Creamos las carpetas si no existen
 os.makedirs(CARPETA_SALIDAS, exist_ok=True)
 os.makedirs(CARPETA_TEMP, exist_ok=True)
+# =========================================================
 
 
 def normalizar_clave_proyecto(nombre):
