@@ -2,10 +2,10 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import datetime
 from email.message import EmailMessage
+from datetime import datetime
 
-# Importamos tu herramienta recién creada
+# Importamos tu herramienta
 from app.utils.helpers import obtener_campo
 
 
@@ -15,7 +15,6 @@ def enviar_correo_win(datos_contacto):
     email_emisor = os.getenv("EMAIL_EMISOR")
     email_password = os.getenv("EMAIL_PASSWORD")
 
-    # Destinatarios principales y copias
     email_destino = os.getenv("EMAIL_DESTINO")
     email_cc = os.getenv("EMAIL_CC_ASIGNACION", "")
 
@@ -43,7 +42,6 @@ def enviar_correo_win(datos_contacto):
     msg['From'] = f"Vertical Futura <{email_emisor}>"
     msg['To'] = email_destino
 
-    # --- AGREGAMOS EL HEADER CC VISUAL SI EXISTE ---
     if email_cc:
         msg['Cc'] = email_cc
 
@@ -79,16 +77,12 @@ def enviar_correo_win(datos_contacto):
     msg.attach(MIMEText(html, 'html'))
 
     try:
-        # Preparamos las listas limpias
         lista_destinos = [correo.strip() for correo in email_destino.split(',')]
         lista_cc = [correo.strip() for correo in email_cc.split(',')] if email_cc else []
-
-        # El servidor SMTP necesita TODOS los correos (TO + CC) sumados en una sola lista de entrega
         todos_los_destinatarios = lista_destinos + lista_cc
 
         with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
             server.login(email_emisor, email_password)
-            # Pasamos la lista completa de entrega
             server.sendmail(email_emisor, todos_los_destinatarios, msg.as_string())
 
         print(f"📧 Correo enviado con éxito para {nombre_predio.upper()} (Con copias a {len(lista_cc)} destinatarios)")
@@ -107,7 +101,7 @@ def enviar_correo_ficha_datos_win(archivo_excel, datos):
     email_password = os.getenv("EMAIL_PASSWORD")
     smtp_server = os.getenv("SMTP_SERVER")
     smtp_port = int(os.getenv("SMTP_PORT", 465))
-    email_cc = os.getenv("EMAIL_CC_FICHA", "")  # Capturamos tu variable CC
+    email_cc = os.getenv("EMAIL_CC_FICHA", "")
 
     cuerpo = f"""
     Buen día,<br><br>
@@ -144,8 +138,12 @@ def enviar_correo_ficha_datos_win(archivo_excel, datos):
         filename=nombre_adjunto
     )
 
-    with smtplib.SMTP_SSL(smtp_server, smtp_port) as smtp:
-        smtp.login(email_emisor, email_password)
-        smtp.send_message(msg)
-
-    print(f"📧 [FICHA DATOS WIN] Correo enviado con adjunto: {nombre_adjunto}")
+    try:
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as smtp:
+            smtp.login(email_emisor, email_password)
+            smtp.send_message(msg)
+        print(f"📧 [FICHA DATOS WIN] Correo enviado con adjunto: {nombre_adjunto}")
+        return True
+    except Exception as e:
+        print(f"❌ Error al enviar correo de Ficha a WIN: {e}")
+        return False

@@ -4,6 +4,7 @@ def obtener_campo(payload, key):
     if isinstance(cf, dict) and key in cf: return cf[key]
     return None
 
+
 def extraer_custom_fields_para_ghl(datos_formulario):
     cf_array = []
     fuente = datos_formulario.get("customFields", datos_formulario)
