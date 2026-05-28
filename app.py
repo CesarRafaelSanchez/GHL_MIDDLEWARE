@@ -30,6 +30,7 @@ SMTP_PORT = os.getenv("SMTP_PORT")
 EMAIL_EMISOR = os.getenv("EMAIL_EMISOR")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_DESTINO = os.getenv("EMAIL_DESTINO")
+STAGE_PENDIENTE_INICIO_HABILITACION = os.getenv("STAGE_PENDIENTE_INICIO_HABILITACION")
 
 HEADERS_GHL = {
     "Authorization": f"Bearer {GHL_TOKEN}",
@@ -574,6 +575,37 @@ def inyectar_custom_fields_desde_contacto(data):
     except Exception as e:
         print("❌ [FICHA DATOS WIN] Error recuperando custom fields:", str(e))
         return data
+
+def mover_oportunidad_a_pendiente_inicio_habilitacion(opp_id):
+    if not opp_id:
+        print("⚠️ [FICHA DATOS WIN] No llegó opportunity ID para mover etapa.")
+        return False
+
+    if not STAGE_PENDIENTE_INICIO_HABILITACION:
+        print("⚠️ [FICHA DATOS WIN] Falta STAGE_PENDIENTE_INICIO_HABILITACION en .env")
+        return False
+
+    try:
+        res = requests.put(
+            f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
+            headers=HEADERS_GHL,
+            json={
+                "pipelineId": PIPELINE_ID,
+                "pipelineStageId": STAGE_PENDIENTE_INICIO_HABILITACION
+            }
+        )
+
+        if res.status_code == 200:
+            print("✅ [FICHA DATOS WIN] Tarjeta movida a 'Pendiente Inicio de Habilitación'.")
+            return True
+
+        print("❌ [FICHA DATOS WIN] Error moviendo tarjeta:", res.text[:500])
+        return False
+
+    except Exception as e:
+        print("❌ [FICHA DATOS WIN] Excepción moviendo tarjeta:", str(e))
+        return False
+
 @app.route("/webhook-enviar-ficha-datos-win", methods=["POST"])
 def webhook_enviar_ficha_datos_win():
     try:
@@ -620,6 +652,9 @@ def webhook_enviar_ficha_datos_win():
         print(f"✅ [FICHA DATOS WIN] Excel generado: {archivo_generado}")
 
         enviar_correo_ficha_datos_win(archivo_generado, datos_excel)
+        # Después de enviar correo a WIN, mover automáticamente a Pendiente Inicio de Habilitación
+        opp_id = data.get("id") or datos_excel.get("_opp_id")
+        mover_oportunidad_a_pendiente_inicio_habilitacion(opp_id)
 
         return jsonify({
             "status": "ok",
