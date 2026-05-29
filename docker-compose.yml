@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  ghl_system:
+    build: .
+    container_name: ghl_system_app
+    restart: always
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./archivos_datos:/app/archivos_datos
+    env_file:
+      - .env
