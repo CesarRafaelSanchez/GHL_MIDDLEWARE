@@ -30,6 +30,9 @@ SMTP_PORT = os.getenv("SMTP_PORT")
 EMAIL_EMISOR = os.getenv("EMAIL_EMISOR")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_DESTINO = os.getenv("EMAIL_DESTINO")
+EMAIL_CC_FICHA = os.getenv("EMAIL_CC_FICHA")
+EMAIL_CC_ASIGNACION = os.getenv("EMAIL_CC_ASIGNACION")
+STAGE_PENDIENTE_INICIO_HABILITACION = os.getenv("STAGE_PENDIENTE_INICIO_HABILITACION")
 
 HEADERS_GHL = {
     "Authorization": f"Bearer {GHL_TOKEN}",
@@ -372,32 +375,47 @@ def generar_excel_ficha_datos(datos):
 def enviar_correo_ficha_datos_win(archivo_excel, datos):
     proyecto = datos.get("nombre_proyecto", "PROYECTO")
 
-    asunto = f"Ficha de Datos - {proyecto}"
+    asunto = f"FICHA DE DATOS {proyecto}"
 
-    cuerpo = f"""
-    Buen día,<br><br>
+    cuerpo_html = """
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #333; font-size: 14px; line-height: 1.5;">
+        <p>Buenas tardes, hacemos envío de la ficha de datos del predio en mención.</p>
 
-    Se adjunta la ficha de datos correspondiente al proyecto:<br><br>
+        <br>
 
-    <b>{proyecto}</b><br><br>
+        <p>Saludos,</p>
 
-    Datos principales:<br>
-    - Distrito: {datos.get("distrito", "")}<br>
-    - Dirección: {datos.get("tipo_via", "")} {datos.get("nombre_via", "")} {datos.get("numero_via", "")}<br>
-    - Responsable: {datos.get("nombre_responsable", "")}<br>
-    - Teléfono: {datos.get("telefono_responsable", "")}<br><br>
+        <br>
 
-    Saludos,<br>
-    Futura
+        <p>
+          Stefano Sotomarino Goche<br>
+          Back Office - Futura
+        </p>
+      </body>
+    </html>
     """
+
+    cuerpo_texto = """
+Buenas tardes, hacemos envío de la ficha de datos del predio en mención.
+
+Saludos,
+
+Stefano Sotomarino Goche
+Back Office - Futura
+"""
 
     msg = EmailMessage()
     msg["From"] = EMAIL_EMISOR
     msg["To"] = EMAIL_DESTINO
+
+    if EMAIL_CC_FICHA:
+        msg["Cc"] = EMAIL_CC_FICHA
+
     msg["Subject"] = asunto
 
-    msg.set_content(f"Se adjunta la ficha de datos del proyecto {proyecto}.")
-    msg.add_alternative(cuerpo, subtype="html")
+    msg.set_content(cuerpo_texto)
+    msg.add_alternative(cuerpo_html, subtype="html")
 
     with open(archivo_excel, "rb") as f:
         contenido_excel = f.read()
@@ -411,11 +429,19 @@ def enviar_correo_ficha_datos_win(archivo_excel, datos):
         filename=nombre_adjunto
     )
 
+    destinatarios = [EMAIL_DESTINO]
+
+    if EMAIL_CC_FICHA:
+        destinatarios.append(EMAIL_CC_FICHA)
+
     with smtplib.SMTP_SSL(SMTP_SERVER, int(SMTP_PORT)) as smtp:
         smtp.login(EMAIL_EMISOR, EMAIL_PASSWORD)
-        smtp.send_message(msg)
+        smtp.send_message(msg, to_addrs=destinatarios)
 
     print(f"📧 [FICHA DATOS WIN] Correo enviado con adjunto: {nombre_adjunto}")
+
+    if EMAIL_CC_FICHA:
+        print(f"📧 [FICHA DATOS WIN] CC enviado a: {EMAIL_CC_FICHA}")
 
 from datetime import datetime
 
@@ -574,6 +600,37 @@ def inyectar_custom_fields_desde_contacto(data):
     except Exception as e:
         print("❌ [FICHA DATOS WIN] Error recuperando custom fields:", str(e))
         return data
+
+def mover_oportunidad_a_pendiente_inicio_habilitacion(opp_id):
+    if not opp_id:
+        print("⚠️ [FICHA DATOS WIN] No llegó opportunity ID para mover etapa.")
+        return False
+
+    if not STAGE_PENDIENTE_INICIO_HABILITACION:
+        print("⚠️ [FICHA DATOS WIN] Falta STAGE_PENDIENTE_INICIO_HABILITACION en .env")
+        return False
+
+    try:
+        res = requests.put(
+            f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
+            headers=HEADERS_GHL,
+            json={
+                "pipelineId": PIPELINE_ID,
+                "pipelineStageId": STAGE_PENDIENTE_INICIO_HABILITACION
+            }
+        )
+
+        if res.status_code == 200:
+            print("✅ [FICHA DATOS WIN] Tarjeta movida a 'Pendiente Inicio de Habilitación'.")
+            return True
+
+        print("❌ [FICHA DATOS WIN] Error moviendo tarjeta:", res.text[:500])
+        return False
+
+    except Exception as e:
+        print("❌ [FICHA DATOS WIN] Excepción moviendo tarjeta:", str(e))
+        return False
+
 @app.route("/webhook-enviar-ficha-datos-win", methods=["POST"])
 def webhook_enviar_ficha_datos_win():
     try:
@@ -620,6 +677,9 @@ def webhook_enviar_ficha_datos_win():
         print(f"✅ [FICHA DATOS WIN] Excel generado: {archivo_generado}")
 
         enviar_correo_ficha_datos_win(archivo_generado, datos_excel)
+        # Después de enviar correo a WIN, mover automáticamente a Pendiente Inicio de Habilitación
+        opp_id = data.get("id") or datos_excel.get("_opp_id")
+        mover_oportunidad_a_pendiente_inicio_habilitacion(opp_id)
 
         return jsonify({
             "status": "ok",
@@ -894,11 +954,17 @@ def enviar_correo_win(datos_contacto):
     email_password = os.getenv("EMAIL_PASSWORD")
     email_destino = os.getenv("EMAIL_DESTINO")
 
-    # Extracción segura de los campos (Priorizando los Custom Fields inyectados)
+    # CC fijo para correo de asignación
+    email_cc_asignacion = os.getenv("EMAIL_CC_ASIGNACION")
+
+    # Extracción segura de los campos
     tipo_predio = obtener_campo(datos_contacto, "cf_tipo_edificio") or "EDIFICIO"
-    # Si no hay campo cf_nombre_proyecto, usamos el opportunity_name nativo del webhook
-    nombre_predio = obtener_campo(datos_contacto, "cf_nombre_proyecto") or datos_contacto.get("opportunity_name",
-                                                                                              "NO ESPECIFICADO")
+
+    nombre_predio = (
+        obtener_campo(datos_contacto, "cf_nombre_proyecto")
+        or datos_contacto.get("opportunity_name", "NO ESPECIFICADO")
+    )
+
     tipo_via = obtener_campo(datos_contacto, "cf_tipo_via") or ""
     nombre_via = obtener_campo(datos_contacto, "cf_nombre_via") or ""
     direccion = f"{tipo_via} {nombre_via}".strip() or "NO ESPECIFICADO"
@@ -909,17 +975,22 @@ def enviar_correo_win(datos_contacto):
     estreno = obtener_campo(datos_contacto, "cf_es_estreno") or "SI"
     inmobiliaria = obtener_campo(datos_contacto, "cf_inmobiliaria") or "NO ESPECIFICADO"
 
-    # Si no hay cf_ejecutivo, usamos el owner nativo del webhook
-    ejecutivo = obtener_campo(datos_contacto, "cf_ejecutivo_principal") or datos_contacto.get("owner",
-                                                                                              "NO ESPECIFICADO")
+    ejecutivo = (
+        obtener_campo(datos_contacto, "cf_ejecutivo_principal")
+        or datos_contacto.get("owner", "NO ESPECIFICADO")
+    )
+
     asignar_reasignar = obtener_campo(datos_contacto, "cf_tipo_gestion") or "ASIGNAR"
 
     fecha_actual = datetime.now().strftime("%d/%m/%Y")
 
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"Solicitud de asignación - {nombre_predio.upper()}"
-    msg['From'] = f"Vertical Futura <{email_emisor}>"
-    msg['To'] = email_destino
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Solicitud de asignación - {str(nombre_predio).upper()}"
+    msg["From"] = f"Vertical Futura <{email_emisor}>"
+    msg["To"] = email_destino
+
+    if email_cc_asignacion:
+        msg["Cc"] = email_cc_asignacion
 
     html = f"""
     <html>
@@ -950,14 +1021,26 @@ def enviar_correo_win(datos_contacto):
       </body>
     </html>
     """
-    msg.attach(MIMEText(html, 'html'))
+
+    msg.attach(MIMEText(html, "html"))
 
     try:
+        destinatarios = [email_destino]
+
+        if email_cc_asignacion:
+            destinatarios.append(email_cc_asignacion)
+
         with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
             server.login(email_emisor, email_password)
-            server.sendmail(email_emisor, [email_destino], msg.as_string())
-        print(f"📧 Correo enviado a WIN para: {nombre_predio.upper()}")
+            server.sendmail(email_emisor, destinatarios, msg.as_string())
+
+        print(f"📧 Correo enviado a WIN para: {str(nombre_predio).upper()}")
+
+        if email_cc_asignacion:
+            print(f"📧 CC asignación enviado a: {email_cc_asignacion}")
+
         return True
+
     except Exception as e:
         print(f"❌ Error al enviar el correo a WIN: {e}")
         return False
