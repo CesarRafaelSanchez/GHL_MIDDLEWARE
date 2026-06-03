@@ -1,9 +1,8 @@
 import os
-import requests
 from flask import Blueprint, request, jsonify
 
 # Importamos tus herramientas y servicios modularizados
-from app.utils.helpers import obtener_campo, extraer_custom_fields_para_ghl
+from app.utils.helpers import obtener_campo, extraer_custom_fields_para_ghl, obtener_session_con_retries
 from app.services.email_smtp import enviar_correo_win, enviar_correo_ficha_datos_win
 from app.services.ficha_service import (
     guardar_datos_ficha_en_cache,
@@ -14,6 +13,9 @@ from app.services.ficha_service import (
     descargar_imagen,
     generar_excel_ficha_datos
 )
+
+# Creamos la sesión robusta con reintentos para evitar caídas por errores 520/5xx de Cloudflare/GHL
+requests = obtener_session_con_retries()
 
 # 1. CREAMOS EL BLUEPRINT
 webhooks_bp = Blueprint('webhooks', __name__)
@@ -189,8 +191,24 @@ def webhook_formulario2():
     custom_fields_nuevos = extraer_custom_fields_para_ghl(datos)
 
     contacto_fantasma_id = datos.get("contact_id") or datos.get("contact", {}).get("id")
+    eliminar_fantasma = False
     if contacto_fantasma_id and contacto_fantasma_id != contacto_original_id:
-        print(f"👻 [FORM 2] Contacto fantasma detectado pero NO eliminado: {contacto_fantasma_id}")
+        print(f"👻 [FORM 2] Contacto fantasma detectado para eliminación posterior: {contacto_fantasma_id}")
+        eliminar_fantasma = True
+
+    # --- DESCARGA INMEDIATA DE IMÁGENES ANTES DE ELIMINAR EL CONTACTO FANTASMA ---
+    url_foto_edificio = obtener_primera_url(obtener_campo(datos, "cf_foto_edificio"))
+    url_foto_montantes = obtener_primera_url(obtener_campo(datos, "cf_foto_montantes"))
+    
+    nombre_limpio = limpiar_nombre_archivo(nombre_proyecto)
+    print(f"📸 [FORM 2] Descargando imágenes previas a la eliminación del fantasma...")
+    foto_edificio_path = descargar_imagen(url_foto_edificio, f"{nombre_limpio}_foto_edificio")
+    foto_montantes_path = descargar_imagen(url_foto_montantes, f"{nombre_limpio}_foto_montantes")
+
+    # Almacenamos las rutas locales en datos para que persistan en caché
+    datos["foto_edificio_path"] = foto_edificio_path
+    datos["foto_montantes_path"] = foto_montantes_path
+    # ----------------------------------------------------------------------------
 
     resp_nombre = obtener_campo(datos, "cf_nombre_responsable_edificio") or ""
     resp_tel = obtener_campo(datos, "cf_telefono_responsable_edificio") or ""
@@ -209,23 +227,59 @@ def webhook_formulario2():
     company_id = res_get_contact.json().get("contact", {}).get("companyId") if res_get_contact.status_code == 200 else None
 
     if company_id:
+        company_payload = {
+            "locationId": LOCATION_ID,
+            "name": nombre_proyecto,
+            "address": direccion_completa,
+            "city": ciudad,
+            "state": estado,
+            "postalCode": codigo_postal,
+            "country": "Peru"
+        }
+        if resp_tel:
+            company_payload["phone"] = resp_tel
         requests.put(
             f"https://services.leadconnectorhq.com/companies/{company_id}",
             headers=HEADERS_GHL,
-            json={"locationId": LOCATION_ID, "name": nombre_proyecto, "phone": resp_tel, "address": direccion_completa, "city": ciudad, "state": estado, "postalCode": codigo_postal, "country": "Peru"}
+            json=company_payload
         )
 
-    requests.put(
+    res_opp_update = requests.put(
         f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
         headers=HEADERS_GHL,
         json={"pipelineId": PIPELINE_ID, "pipelineStageId": STAGE_FORM_2, "name": nombre_proyecto, "customFields": custom_fields_nuevos}
     )
+    print(f"🔄 [FORM 2] Oportunidad {opp_id} actualizada. Status: {res_opp_update.status_code}")
 
-    requests.put(
+    # Intentamos actualizar el contacto original omitiendo campos vacíos para evitar error 422
+    contact_payload = {
+        "firstName": resp_nombre if resp_nombre else "Administración:",
+        "lastName": nombre_proyecto,
+        "customFields": custom_fields_nuevos
+    }
+    if resp_correo:
+        contact_payload["email"] = resp_correo
+    if resp_tel:
+        contact_payload["phone"] = resp_tel
+
+    res_contact = requests.put(
         f"https://services.leadconnectorhq.com/contacts/{contacto_original_id}",
         headers=HEADERS_GHL,
-        json={"firstName": resp_nombre if resp_nombre else "Administración:", "lastName": nombre_proyecto, "email": resp_correo, "phone": resp_tel, "customFields": custom_fields_nuevos}
+        json=contact_payload
     )
+
+    # Si GHL rechaza por duplicados (400), reintentamos la actualización sin los campos de identidad
+    if res_contact.status_code == 400 and "duplicated" in res_contact.text.lower():
+        print("⚠️ [FORM 2] GHL bloqueó actualización por duplicación de email/teléfono. Reintentando actualización sin campos de identidad...")
+        contact_payload.pop("email", None)
+        contact_payload.pop("phone", None)
+        res_contact = requests.put(
+            f"https://services.leadconnectorhq.com/contacts/{contacto_original_id}",
+            headers=HEADERS_GHL,
+            json=contact_payload
+        )
+
+    print(f"🔄 [FORM 2] Contacto original {contacto_original_id} actualizado. Status: {res_contact.status_code}")
 
     guardar_datos_ficha_en_cache(
         nombre_proyecto=nombre_proyecto,
@@ -233,6 +287,17 @@ def webhook_formulario2():
         contact_id=contacto_original_id,
         datos=datos
     )
+
+    # Eliminar contacto fantasma si se marcó
+    if eliminar_fantasma:
+        try:
+            res_del = requests.delete(
+                f"https://services.leadconnectorhq.com/contacts/{contacto_fantasma_id}",
+                headers=HEADERS_GHL
+            )
+            print(f"🗑️ [FORM 2] Contacto fantasma {contacto_fantasma_id} eliminado de GHL. Status: {res_del.status_code}")
+        except Exception as e:
+            print(f"⚠️ [FORM 2] Error al eliminar contacto fantasma {contacto_fantasma_id}: {e}")
 
     print(f"✅ [FORM 2] Proyecto '{nombre_proyecto}' actualizado. Empresa y Contacto sincronizados.")
     return jsonify({"status": "success"}), 200
@@ -310,15 +375,27 @@ def webhook_enviar_ficha_datos_win():
         print("📸 URL FOTO EDIFICIO:", url_foto_edificio)
         print("📸 URL FOTO MONTANTES:", url_foto_montantes)
 
-        foto_edificio_path = descargar_imagen(
-            url_foto_edificio,
-            f"{nombre_limpio}_foto_edificio"
-        )
+        # Verificamos si los archivos ya fueron descargados previamente en el webhook 2
+        foto_edificio_path = data.get("foto_edificio_path")
+        foto_montantes_path = data.get("foto_montantes_path")
 
-        foto_montantes_path = descargar_imagen(
-            url_foto_montantes,
-            f"{nombre_limpio}_foto_montantes"
-        )
+        if not foto_edificio_path or not os.path.exists(foto_edificio_path):
+            print("📸 Foto Edificio no encontrada en caché local o eliminada, descargando...")
+            foto_edificio_path = descargar_imagen(
+                url_foto_edificio,
+                f"{nombre_limpio}_foto_edificio"
+            )
+        else:
+            print("📸 Foto Edificio recuperada directamente del caché local:", foto_edificio_path)
+
+        if not foto_montantes_path or not os.path.exists(foto_montantes_path):
+            print("📸 Foto Montantes no encontrada en caché local o eliminada, descargando...")
+            foto_montantes_path = descargar_imagen(
+                url_foto_montantes,
+                f"{nombre_limpio}_foto_montantes"
+            )
+        else:
+            print("📸 Foto Montantes recuperada directamente del caché local:", foto_montantes_path)
 
         datos_excel["foto_edificio_path"] = foto_edificio_path
         datos_excel["foto_montantes_path"] = foto_montantes_path
@@ -341,3 +418,26 @@ def webhook_enviar_ficha_datos_win():
             "status": "error",
             "mensaje": str(e)
         }), 500
+
+
+# =========================================================
+# API DE CACHÉ PARA EL BOT DOCKERIZADO
+# =========================================================
+@webhooks_bp.route('/api/cache/<identifier>', methods=['GET'])
+def obtener_cache_api(identifier):
+    from app.services.ficha_service import cargar_cache_fichas, normalizar_clave_proyecto
+    try:
+        cache = cargar_cache_fichas()
+        posibles_claves = [
+            f"opp::{identifier}",
+            f"contact::{identifier}",
+            f"nombre::{normalizar_clave_proyecto(identifier)}"
+        ]
+        for clave in posibles_claves:
+            if clave in cache:
+                print(f"[OK] [API CACHE] Enviando datos a bot para clave: {clave}", flush=True)
+                return jsonify(cache[clave]), 200
+        return jsonify({"error": "No encontrado en caché"}), 404
+    except Exception as e:
+        print("[ERROR] [API CACHE] Error:", str(e), flush=True)
+        return jsonify({"error": str(e)}), 500

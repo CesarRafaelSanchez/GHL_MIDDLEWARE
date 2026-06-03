@@ -1,12 +1,14 @@
 import os
 import json
-import requests
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
 from PIL import Image as PILImage
 from io import BytesIO
 from dotenv import load_dotenv
+from app.utils.helpers import obtener_session_con_retries
+
+requests = obtener_session_con_retries()
 
 #load_dotenv()
 
@@ -113,11 +115,27 @@ def marcar_excel(ws, celda, condicion):
 def obtener_primera_url(valor):
     if not valor:
         return ""
+
     if isinstance(valor, list) and len(valor) > 0:
-        return valor[0]
-    if isinstance(valor, str):
-        return valor
-    return ""
+        val = valor[0]
+    else:
+        val = valor
+
+    if isinstance(val, dict):
+        # Caso de diccionario anidado con UUID como clave: {'uuid': {'url': '...'}}
+        if len(val) == 1 and isinstance(list(val.values())[0], dict):
+            inner = list(val.values())[0]
+            url = inner.get("url") or inner.get("value") or inner.get("downloadUrl")
+            if url:
+                return url
+        url = val.get("url") or val.get("value") or val.get("downloadUrl")
+        if url:
+            return url
+
+    if isinstance(val, str):
+        return val.strip()
+
+    return str(val)
 
 
 def limpiar_nombre_archivo(nombre):
@@ -197,29 +215,29 @@ def generar_excel_ficha_datos(datos):
     ws = wb["Ficha"]
 
     escribir_excel(ws, "C5", datos.get("nombre_proyecto"))
-    tipo_proyecto = datos.get("tipo_proyecto", "").upper()
+    tipo_proyecto = (datos.get("tipo_proyecto") or "").upper()
     marcar_excel(ws, "E8", tipo_proyecto == "NUEVO PREDIO")
     marcar_excel(ws, "I8", tipo_proyecto == "AMPLIACION DE TORRE")
-    fuente = datos.get("fuente_origen", "").upper()
+    fuente = (datos.get("fuente_origen") or "").upper()
     marcar_excel(ws, "E12", fuente == "PROPIO")
-    clasificacion = datos.get("clasificacion", "").upper()
+    clasificacion = (datos.get("clasificacion") or "").upper()
     marcar_excel(ws, "E16", clasificacion == "CONDOMINIO")
     marcar_excel(ws, "I16", clasificacion == "EDIFICIO")
-    tipo_construccion = datos.get("tipo_construccion", "").upper()
+    tipo_construccion = (datos.get("tipo_construccion") or "").upper()
     marcar_excel(ws, "E22", tipo_construccion == "ESTRENO")
     marcar_excel(ws, "I22", tipo_construccion == "MODERNO")
     marcar_excel(ws, "L22", tipo_construccion == "ANTIGUO")
     escribir_excel(ws, "E23", datos.get("fecha_entrega_edificio"))
     escribir_excel(ws, "E25", datos.get("fecha_termino_montantes"))
     escribir_excel(ws, "E26", datos.get("fecha_termino_mecha"))
-    junta = datos.get("junta_directiva", "").upper()
+    junta = (datos.get("junta_directiva") or "").upper()
     marcar_excel(ws, "E31", junta == "SI")
     marcar_excel(ws, "I31", junta == "NO")
     escribir_excel(ws, "D34", datos.get("cargo_responsable"))
     escribir_excel(ws, "I34", datos.get("nombre_responsable"))
     escribir_excel(ws, "D35", datos.get("telefono_responsable"))
     escribir_excel(ws, "I35", datos.get("correo_responsable"))
-    operador = datos.get("operador_actual", "").upper()
+    operador = (datos.get("operador_actual") or "").upper()
     marcar_excel(ws, "E39", operador == "MOVISTAR")
     marcar_excel(ws, "I39", operador == "NUBYX")
     marcar_excel(ws, "L39", operador == "ENTEL")
@@ -228,7 +246,7 @@ def generar_excel_ficha_datos(datos):
     marcar_excel(ws, "L40", operador == "BITEL")
     marcar_excel(ws, "E42", operador == "NINGUNO")
     escribir_excel(ws, "D46", datos.get("visita_inspeccion_tecnica"))
-    horario = datos.get("rango_horario_visita", "").upper()
+    horario = (datos.get("rango_horario_visita") or "").upper()
     marcar_excel(ws, "I46", horario in ["9 AM A 12 AM", "9AM A 12M", "9 AM A 12M"])
     marcar_excel(ws, "L46", horario == "1 PM A 4 PM")
     escribir_excel(ws, "C50", datos.get("departamento"))
