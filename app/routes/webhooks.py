@@ -441,3 +441,14 @@ def obtener_cache_api(identifier):
     except Exception as e:
         print("[ERROR] [API CACHE] Error:", str(e), flush=True)
         return jsonify({"error": str(e)}), 500
+
+
+@webhooks_bp.route('/api/cache/files/<filename>', methods=['GET'])
+def obtener_archivo_cache(filename):
+    from flask import send_from_directory
+    from app.services.ficha_service import CARPETA_TEMP
+    try:
+        return send_from_directory(CARPETA_TEMP, filename)
+    except Exception as e:
+        print(f"[ERROR] [API CACHE FILE] Error al servir {filename}: {e}", flush=True)
+        return jsonify({"error": "Archivo no encontrado"}), 404
