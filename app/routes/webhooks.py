@@ -379,6 +379,15 @@ def webhook_enviar_ficha_datos_win():
         foto_edificio_path = data.get("foto_edificio_path")
         foto_montantes_path = data.get("foto_montantes_path")
 
+        # Normalizar rutas locales para compatibilidad cruzada entre Windows y Linux (Docker)
+        from app.services.ficha_service import CARPETA_TEMP
+        if foto_edificio_path:
+            filename_edificio = foto_edificio_path.replace('\\', '/').split('/')[-1]
+            foto_edificio_path = os.path.join(CARPETA_TEMP, filename_edificio)
+        if foto_montantes_path:
+            filename_montantes = foto_montantes_path.replace('\\', '/').split('/')[-1]
+            foto_montantes_path = os.path.join(CARPETA_TEMP, filename_montantes)
+
         if not foto_edificio_path or not os.path.exists(foto_edificio_path):
             print("📸 Foto Edificio no encontrada en caché local o eliminada, descargando...")
             foto_edificio_path = descargar_imagen(
