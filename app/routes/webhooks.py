@@ -28,6 +28,7 @@ LOCATION_ID = os.getenv("GHL_LOCATION_ID")
 PIPELINE_ID = os.getenv("PIPELINE_ID")
 STAGE_FORM_1 = os.getenv("STAGE_FORM_1_COMPLETADO")
 STAGE_FORM_2 = os.getenv("STAGE_FORM_2_COMPLETADO")
+STAGE_PENDIENTE_INICIO_HABILITACION = os.getenv("STAGE_PENDIENTE_INICIO_HABILITACION")
 
 HEADERS_GHL = {
     "Authorization": f"Bearer {GHL_TOKEN}",
@@ -40,6 +41,37 @@ USERS_GHL = {
     "YASMIN": "bVGkAziqy6vwDoFbqvr6",
     "STEFANO_BO": "6u8iZhDXnxp0xSp7XfDl"
 }
+
+
+def mover_oportunidad_a_pendiente_inicio_habilitacion(opp_id):
+    if not opp_id:
+        print("⚠️ [FICHA DATOS WIN] No llegó opportunity ID para mover etapa.")
+        return False
+
+    if not STAGE_PENDIENTE_INICIO_HABILITACION:
+        print("⚠️ [FICHA DATOS WIN] Falta STAGE_PENDIENTE_INICIO_HABILITACION en .env")
+        return False
+
+    try:
+        res = requests.put(
+            f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
+            headers=HEADERS_GHL,
+            json={
+                "pipelineId": PIPELINE_ID,
+                "pipelineStageId": STAGE_PENDIENTE_INICIO_HABILITACION
+            }
+        )
+
+        if res.status_code == 200:
+            print("✅ [FICHA DATOS WIN] Tarjeta movida a 'Pendiente Inicio de Habilitación'.")
+            return True
+
+        print("❌ [FICHA DATOS WIN] Error moviendo tarjeta:", res.text[:500])
+        return False
+
+    except Exception as e:
+        print("❌ [FICHA DATOS WIN] Excepción moviendo tarjeta:", str(e))
+        return False
 
 
 # =========================================================
@@ -404,7 +436,11 @@ def webhook_enviar_ficha_datos_win():
 
         print(f"✅ [FICHA DATOS WIN] Excel generado: {archivo_generado}")
 
-        enviar_correo_ficha_datos_win(archivo_generado, datos_excel)
+        correo_enviado = enviar_correo_ficha_datos_win(archivo_generado, datos_excel)
+        if correo_enviado:
+            # Si el correo se envía correctamente, auto-avanzar la tarjeta en GHL
+            opp_id = data.get("id") or data.get("_opp_id")
+            mover_oportunidad_a_pendiente_inicio_habilitacion(opp_id)
 
         return jsonify({
             "status": "ok",
