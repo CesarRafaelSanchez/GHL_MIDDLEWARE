@@ -18,4 +18,4 @@ COPY . .
 EXPOSE 5001
 
 # Ejecutar con Gunicorn para producción (evita usar el servidor de desarrollo de Flask)
-CMD ["gunicorn", "--bind", "0.0.0.0:5001", "run.py:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5001", "run:app"]
