@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as ExcelImage
 from PIL import Image as PILImage
 from io import BytesIO
@@ -21,7 +22,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 CARPETA_SALIDAS = os.path.join(BASE_DIR, "archivos_datos", "salidas")
 CARPETA_TEMP = os.path.join(BASE_DIR, "archivos_datos", "temp")
 ARCHIVO_CACHE_FICHAS = os.path.join(BASE_DIR, "archivos_datos", "cache_fichas_datos.json")
-RUTA_PLANTILLA_FICHA_DATOS = os.path.join(BASE_DIR, "archivos_datos", "plantillas", "Ficha de Datos NOMBRE DEL PROYECTO.xlsx")
+RUTA_PLANTILLA_FICHA_DATOS = os.path.join(BASE_DIR, "plantillas", "Ficha de Datos NOMBRE DEL PROYECTO - Junio.xlsx")
 
 # Creamos las carpetas si no existen
 os.makedirs(CARPETA_SALIDAS, exist_ok=True)
@@ -195,19 +196,53 @@ def descargar_imagen(url, nombre_archivo):
 
 def insertar_imagen_excel(ws, ruta_imagen, celda, ancho=330, alto=260):
     if not ruta_imagen:
-        print(f"⚠️ No hay imagen para insertar en {celda}")
+        print(f"[WARN] No hay imagen para insertar en {celda}")
         return
     if not os.path.exists(ruta_imagen):
-        print(f"⚠️ No existe la imagen local: {ruta_imagen}")
+        print(f"[WARN] No existe la imagen local: {ruta_imagen}")
         return
     try:
         img = ExcelImage(ruta_imagen)
         img.width = ancho
         img.height = alto
         ws.add_image(img, celda)
-        print(f"✅ Imagen insertada en Excel: {ruta_imagen} -> {celda}")
+        print(f"[OK] Imagen insertada en Excel: {ruta_imagen} -> {celda}")
     except Exception as e:
-        print(f"❌ Error insertando imagen en Excel: {e}")
+        print(f"[ERROR] Error insertando imagen en Excel: {e}")
+
+
+def parsear_hogares_por_piso(valor, num_pisos):
+    if not num_pisos:
+        return []
+    try:
+        num_pisos = int(num_pisos)
+    except:
+        return []
+
+    if not valor:
+        return [0] * num_pisos
+
+    valor_str = str(valor).strip()
+    # Si es un solo entero
+    if valor_str.isdigit():
+        return [int(valor_str)] * num_pisos
+
+    # Si es una lista separada por comas
+    try:
+        parts = []
+        for x in valor_str.split(','):
+            x_clean = x.strip()
+            if x_clean.isdigit():
+                parts.append(int(x_clean))
+            else:
+                parts.append(0)
+        if len(parts) < num_pisos:
+            parts += [0] * (num_pisos - len(parts))
+        elif len(parts) > num_pisos:
+            parts = parts[:num_pisos]
+        return parts
+    except:
+        return [0] * num_pisos
 
 
 def generar_excel_ficha_datos(datos):
@@ -216,13 +251,13 @@ def generar_excel_ficha_datos(datos):
 
     escribir_excel(ws, "C5", datos.get("nombre_proyecto"))
     tipo_proyecto = (datos.get("tipo_proyecto") or "").upper()
-    marcar_excel(ws, "E8", tipo_proyecto == "NUEVO PREDIO")
-    marcar_excel(ws, "I8", tipo_proyecto == "AMPLIACION DE TORRE")
+    marcar_excel(ws, "F8", tipo_proyecto == "NUEVO PREDIO")
+    marcar_excel(ws, "L8", tipo_proyecto == "AMPLIACION DE TORRE")
     fuente = (datos.get("fuente_origen") or "").upper()
     marcar_excel(ws, "E12", fuente == "PROPIO")
     clasificacion = (datos.get("clasificacion") or "").upper()
-    marcar_excel(ws, "E16", clasificacion == "CONDOMINIO")
-    marcar_excel(ws, "I16", clasificacion == "EDIFICIO")
+    marcar_excel(ws, "E16", clasificacion == "EDIFICIO")
+    marcar_excel(ws, "I16", clasificacion == "CONDOMINIO")
     tipo_construccion = (datos.get("tipo_construccion") or "").upper()
     marcar_excel(ws, "E22", tipo_construccion == "ESTRENO")
     marcar_excel(ws, "I22", tipo_construccion == "MODERNO")
@@ -237,45 +272,90 @@ def generar_excel_ficha_datos(datos):
     escribir_excel(ws, "I34", datos.get("nombre_responsable"))
     escribir_excel(ws, "D35", datos.get("telefono_responsable"))
     escribir_excel(ws, "I35", datos.get("correo_responsable"))
-    operador = (datos.get("operador_actual") or "").upper()
-    marcar_excel(ws, "E39", operador == "MOVISTAR")
-    marcar_excel(ws, "I39", operador == "NUBYX")
-    marcar_excel(ws, "L39", operador == "ENTEL")
-    marcar_excel(ws, "E40", operador == "CLARO")
-    marcar_excel(ws, "I40", operador == "WOW")
-    marcar_excel(ws, "L40", operador == "BITEL")
-    marcar_excel(ws, "E42", operador == "NINGUNO")
-    escribir_excel(ws, "D46", datos.get("visita_inspeccion_tecnica"))
-    horario = (datos.get("rango_horario_visita") or "").upper()
-    marcar_excel(ws, "I46", horario in ["9 AM A 12 AM", "9AM A 12M", "9 AM A 12M"])
-    marcar_excel(ws, "L46", horario == "1 PM A 4 PM")
-    escribir_excel(ws, "C50", datos.get("departamento"))
-    escribir_excel(ws, "I50", datos.get("provincia"))
-    escribir_excel(ws, "C51", datos.get("distrito"))
-    escribir_excel(ws, "I51", datos.get("urbanizacion"))
-    escribir_excel(ws, "C52", datos.get("codigo_postal"))
-    escribir_excel(ws, "C53", datos.get("tipo_via"))
-    escribir_excel(ws, "C54", datos.get("nombre_via"))
-    escribir_excel(ws, "C55", datos.get("numero_via"))
-    escribir_excel(ws, "C56", datos.get("coordenadas"))
-    escribir_excel(ws, "C60", datos.get("total_torres"))
-    escribir_excel(ws, "C61", datos.get("total_hogares"))
-    escribir_excel(ws, "A63", f"TORRE {datos.get('nombre_torre1', '')}")
-    escribir_excel(ws, "D63", datos.get("pisos_torre1"))
-    escribir_excel(ws, "D64", datos.get("hogares_torre1"))
-    escribir_excel(ws, "A66", f"TORRE {datos.get('nombre_torre2', '')}")
-    escribir_excel(ws, "D66", datos.get("pisos_torre2"))
-    escribir_excel(ws, "D67", datos.get("hogares_torre2"))
-    escribir_excel(ws, "A69", f"TORRE {datos.get('nombre_torre3', '')}")
-    escribir_excel(ws, "D69", datos.get("pisos_torre3"))
-    escribir_excel(ws, "D70", datos.get("hogares_torre3"))
-    escribir_excel(ws, "C77", datos.get("clientes_interesados"))
-    escribir_excel(ws, "C81", datos.get("nombre_canal"))
-    escribir_excel(ws, "C84", datos.get("gestor"))
-    escribir_excel(ws, "I84", datos.get("celular_gestor"))
 
-    insertar_imagen_excel(ws, datos.get("foto_edificio_path"), "A89", 330, 260)
-    insertar_imagen_excel(ws, datos.get("foto_montantes_path"), "F89", 330, 260)
+    escribir_excel(ws, "D39", datos.get("visita_inspeccion_tecnica"))
+    horario = (datos.get("rango_horario_visita") or "").upper()
+    marcar_excel(ws, "I39", horario in ["9 AM A 12 AM", "9AM A 12M", "9 AM A 12M"])
+    marcar_excel(ws, "L39", horario == "1 PM A 4 PM")
+
+    escribir_excel(ws, "C43", datos.get("departamento"))
+    escribir_excel(ws, "I43", datos.get("provincia"))
+    escribir_excel(ws, "C44", datos.get("distrito"))
+    escribir_excel(ws, "I44", datos.get("urbanizacion"))
+    escribir_excel(ws, "C45", datos.get("codigo_postal"))
+    escribir_excel(ws, "C46", datos.get("tipo_via"))
+    escribir_excel(ws, "C47", datos.get("nombre_via"))
+    escribir_excel(ws, "C48", datos.get("numero_via"))
+    escribir_excel(ws, "C49", datos.get("coordenadas"))
+
+    # Lógica de torres y hogares por piso dinámica
+    escribir_excel(ws, "C53", datos.get("total_torres"))
+    escribir_excel(ws, "C54", datos.get("total_hogares"))
+
+    towers = []
+    for i in range(1, 4):
+        t_name = datos.get(f"nombre_torre{i}")
+        t_pisos = datos.get(f"pisos_torre{i}")
+        t_hogares_piso = datos.get(f"hogares_por_piso_torre{i}")
+
+        if t_pisos:
+            try:
+                npisos = int(t_pisos)
+            except:
+                npisos = 0
+            if npisos > 0:
+                t_name_val = t_name if t_name else str(i)
+                hogares_list = parsear_hogares_por_piso(t_hogares_piso, npisos)
+                towers.append({
+                    "name": t_name_val,
+                    "pisos": npisos,
+                    "hogares_list": hogares_list
+                })
+
+    bloques_filas = [58, 61, 64, 67]
+    bloque_idx = 0
+
+    for t in towers:
+        pisos_restantes = t["pisos"]
+        hogares_restantes = list(t["hogares_list"])
+        tower_block_num = 0
+
+        while pisos_restantes > 0 and bloque_idx < len(bloques_filas):
+            row_start = bloques_filas[bloque_idx]
+
+            if tower_block_num == 0:
+                escribir_excel(ws, f"A{row_start}", f"TORRE {t['name']}")
+            else:
+                escribir_excel(ws, f"A{row_start}", "")
+
+            escribir_excel(ws, f"B{row_start}", "PISO :")
+            escribir_excel(ws, f"B{row_start+1}", "HOGARES POR PISO")
+
+            for c in range(1, 11):
+                col_letter = get_column_letter(2 + c)
+                floor_in_block = tower_block_num * 10 + c
+
+                escribir_excel(ws, f"{col_letter}{row_start}", floor_in_block)
+
+                if floor_in_block <= t["pisos"]:
+                    h_val = hogares_restantes[floor_in_block - 1]
+                    escribir_excel(ws, f"{col_letter}{row_start+1}", h_val)
+                else:
+                    escribir_excel(ws, f"{col_letter}{row_start+1}", "N/A")
+
+            escribir_excel(ws, f"M{row_start}", "TOTAL")
+            ws[f"M{row_start+1}"] = f"=SUM(C{row_start+1}:L{row_start+1})"
+
+            pisos_restantes -= 10
+            tower_block_num += 1
+            bloque_idx += 1
+
+    escribir_excel(ws, "C72", datos.get("nombre_canal"))
+    escribir_excel(ws, "C75", datos.get("gestor"))
+    escribir_excel(ws, "I75", datos.get("celular_gestor"))
+
+    insertar_imagen_excel(ws, datos.get("foto_edificio_path"), "A80", 330, 260)
+    insertar_imagen_excel(ws, datos.get("foto_montantes_path"), "F80", 330, 260)
 
     nombre_proyecto = limpiar_nombre_archivo(datos.get("nombre_proyecto", "PROYECTO")).replace("_", " ")
     nombre_archivo = f"Ficha de Datos - {nombre_proyecto}.xlsx"
@@ -314,7 +394,9 @@ def construir_datos_ficha_desde_webhook(data):
         "nombre_responsable": data.get("cf_nombre_responsable_edificio"),
         "telefono_responsable": data.get("cf_telefono_responsable_edificio"),
         "correo_responsable": data.get("cf_correo_responsable_edificio"),
-        "operador_actual": data.get("cf_operador_actual"),
+        "hogares_por_piso_torre1": data.get("cf_hogares_por_piso_torre1"),
+        "hogares_por_piso_torre2": data.get("cf_hogares_por_piso_torre2"),
+        "hogares_por_piso_torre3": data.get("cf_hogares_por_piso_torre3"),
         "visita_inspeccion_tecnica": formatear_fecha(data.get("cf_visita_inspeccion_tecnica_win")),
         "rango_horario_visita": data.get("cf_rango_horario_visita_tecnica"),
         "departamento": data.get("cf_departamento_edificio"),
@@ -344,6 +426,6 @@ def construir_datos_ficha_desde_webhook(data):
         "foto_edificio": obtener_primera_url(data.get("cf_foto_edificio")),
         "foto_montantes": obtener_primera_url(data.get("cf_foto_montantes")),
     }
-    print("📸 [MAPEO] cf_foto_edificio:", data.get("cf_foto_edificio"))
-    print("📸 [MAPEO] cf_foto_montantes:", data.get("cf_foto_montantes"))
+    print("[MAPEO] cf_foto_edificio:", data.get("cf_foto_edificio"))
+    print("[MAPEO] cf_foto_montantes:", data.get("cf_foto_montantes"))
     return datos
