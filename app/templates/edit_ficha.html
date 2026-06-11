@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edición de Ficha - {{ opp.nombre_proyecto }}</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --card-bg: rgba(26, 29, 38, 0.65);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-color: #e2e8f0;
+            --text-muted: #94a3b8;
+            --primary-glow: linear-gradient(135deg, #7c3aed, #4f46e5);
+            --primary-color: #8b5cf6;
+            --primary-hover: #a78bfa;
+            --success-color: #10b981;
+            --error-color: #ef4444;
+            --font-main: 'Inter', sans-serif;
+            --font-title: 'Outfit', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-main);
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(124, 58, 237, 0.08) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(79, 70, 229, 0.08) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-color);
+            line-height: 1.5;
+            padding: 2rem 1rem;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Header Style */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .header-title h1 {
+            font-family: var(--font-title);
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #ffffff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .header-title p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem 1.5rem;
+            font-family: var(--font-main);
+            font-size: 0.95rem;
+            font-weight: 600;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: var(--primary-glow);
+            color: white;
+            box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(124, 58, 237, 0.45);
+            filter: brightness(1.1);
+        }
+
+        /* Grid & Cards */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.75rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(139, 92, 246, 0.25);
+        }
+
+        .col-12 { grid-column: span 12; }
+        .col-8 { grid-column: span 8; }
+        .col-6 { grid-column: span 6; }
+        .col-4 { grid-column: span 4; }
+
+        @media (max-width: 900px) {
+            .col-8, .col-6, .col-4 { grid-column: span 12; }
+            header { flex-direction: column; align-items: flex-start; gap: 1rem; }
+        }
+
+        .card-title {
+            font-family: var(--font-title);
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.75rem;
+        }
+
+        /* Form elements */
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        @media (max-width: 600px) {
+            .form-row { grid-template-columns: 1fr; }
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        input[type="text"],
+        input[type="tel"],
+        input[type="email"],
+        select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-family: var(--font-main);
+            font-size: 0.95rem;
+            background-color: rgba(15, 17, 26, 0.75);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-color);
+            transition: all 0.25s ease;
+        }
+
+        input[type="text"]:focus,
+        input[type="tel"]:focus,
+        input[type="email"]:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+            background-color: rgba(15, 17, 26, 0.95);
+        }
+
+        /* Image uploads */
+        .photo-upload-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            position: relative;
+            background-color: rgba(15, 17, 26, 0.3);
+            margin-bottom: 1rem;
+        }
+
+        .photo-upload-zone:hover {
+            border-color: var(--primary-color);
+            background-color: rgba(139, 92, 246, 0.03);
+        }
+
+        .photo-preview {
+            max-width: 100%;
+            max-height: 200px;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            object-fit: cover;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .photo-upload-zone input[type="file"] {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .upload-icon {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        /* Messages */
+        .alert {
+            padding: 1rem 1.25rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            font-weight: 500;
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .alert-success {
+            background-color: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            color: #34d399;
+        }
+
+        .alert-error {
+            background-color: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            color: #f87171;
+        }
+
+        /* Floating footer for Actions */
+        .action-bar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 1rem;
+            margin-top: 2rem;
+            padding: 1.5rem 0;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .btn-secondary {
+            background-color: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+        }
+
+        .btn-secondary:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            display: inline-block;
+            width: 1.2rem;
+            height: 1.2rem;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+            display: none;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-title">
+                <h1>Ficha de Datos: {{ opp.nombre_proyecto }}</h1>
+                <p>Edición interna y sincronización para el Back Office</p>
+            </div>
+            <div>
+                <span style="font-size: 0.85rem; color: var(--text-muted);">ID de Contacto: {{ opp.contacto_id }}</span>
+            </div>
+        </header>
+
+        <!-- Alert messages -->
+        <div id="alert-success" class="alert alert-success"></div>
+        <div id="alert-error" class="alert alert-error"></div>
+
+        <form id="edit-ficha-form" enctype="multipart/form-data">
+            <div class="form-grid">
+                
+                <!-- 1. GENERAL -->
+                <div class="card col-6">
+                    <div class="card-title">🏢 Detalles Generales</div>
+                    <div class="form-group">
+                        <label for="nombre_proyecto">Nombre del Proyecto / Edificio</label>
+                        <input type="text" id="nombre_proyecto" name="nombre_proyecto" value="{{ opp.nombre_proyecto or '' }}">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="tipo_proyecto">Tipo de Proyecto</label>
+                            <input type="text" id="tipo_proyecto" name="tipo_proyecto" value="{{ opp.tipo_proyecto or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="fuente_origen">Fuente / Origen</label>
+                            <input type="text" id="fuente_origen" name="fuente_origen" value="{{ opp.fuente_origen or '' }}">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="clasificacion">Clasificación</label>
+                            <select id="clasificacion" name="clasificacion">
+                                <option value="Edificio" {% if opp.clasificacion == 'Edificio' %}selected{% endif %}>Edificio</option>
+                                <option value="Condominio" {% if opp.clasificacion == 'Condominio' %}selected{% endif %}>Condominio</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="tipo_construccion">Tipo de Construcción</label>
+                            <input type="text" id="tipo_construccion" name="tipo_construccion" value="{{ opp.tipo_construccion or '' }}">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. DIRECCION Y UBICACION -->
+                <div class="card col-6">
+                    <div class="card-title">📍 Dirección y Ubicación</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="departamento">Departamento</label>
+                            <input type="text" id="departamento" name="departamento" value="{{ opp.departamento or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="provincia">Provincia</label>
+                            <input type="text" id="provincia" name="provincia" value="{{ opp.provincia or '' }}">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="distrito">Distrito</label>
+                            <input type="text" id="distrito" name="distrito" value="{{ opp.distrito or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="urbanizacion">Urbanización</label>
+                            <input type="text" id="urbanizacion" name="urbanizacion" value="{{ opp.urbanizacion or '' }}">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="tipo_via">Tipo de Vía</label>
+                            <input type="text" id="tipo_via" name="tipo_via" value="{{ opp.tipo_via or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="nombre_via">Nombre de la Vía</label>
+                            <input type="text" id="nombre_via" name="nombre_via" value="{{ opp.nombre_via or '' }}">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="numero_via">Número de la Vía</label>
+                            <input type="text" id="numero_via" name="numero_via" value="{{ opp.numero_via or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="coordenadas">Coordenadas GPS</label>
+                            <input type="text" id="coordenadas" name="coordenadas" value="{{ opp.coordenadas or '' }}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="codigo_postal">Código Postal</label>
+                        <input type="text" id="codigo_postal" name="codigo_postal" value="{{ opp.codigo_postal or '' }}">
+                    </div>
+                </div>
+
+                <!-- 3. FECHAS CLAVE -->
+                <div class="card col-4">
+                    <div class="card-title">📅 Fechas Clave</div>
+                    <div class="form-group">
+                        <label for="fecha_entrega_edificio">Entrega del Edificio</label>
+                        <input type="text" id="fecha_entrega_edificio" name="fecha_entrega_edificio" value="{{ opp.fecha_entrega_edificio or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="fecha_termino_montantes">Término de Montantes</label>
+                        <input type="text" id="fecha_termino_montantes" name="fecha_termino_montantes" value="{{ opp.fecha_termino_montantes or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="fecha_termino_mecha">Término de Mecha</label>
+                        <input type="text" id="fecha_termino_mecha" name="fecha_termino_mecha" value="{{ opp.fecha_termino_mecha or '' }}">
+                    </div>
+                </div>
+
+                <!-- 4. RESPONSABLE -->
+                <div class="card col-4">
+                    <div class="card-title">👤 Contacto Responsable</div>
+                    <div class="form-group">
+                        <label for="nombre_responsable">Nombre del Responsable</label>
+                        <input type="text" id="nombre_responsable" name="nombre_responsable" value="{{ opp.nombre_responsable or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="cargo_responsable">Cargo del Responsable</label>
+                        <input type="text" id="cargo_responsable" name="cargo_responsable" value="{{ opp.cargo_responsable or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="telefono_responsable">Teléfono del Responsable</label>
+                        <input type="tel" id="telefono_responsable" name="telefono_responsable" value="{{ opp.telefono_responsable or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="correo_responsable">Correo del Responsable</label>
+                        <input type="email" id="correo_responsable" name="correo_responsable" value="{{ opp.correo_responsable or '' }}">
+                    </div>
+                </div>
+
+                <!-- 5. ESTRUCTURA Y TORRES -->
+                <div class="card col-4">
+                    <div class="card-title">🏗️ Estructura del Edificio</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="total_torres">Total Torres</label>
+                            <input type="text" id="total_torres" name="total_torres" value="{{ opp.total_torres or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="total_hogares">Total Hogares</label>
+                            <input type="text" id="total_hogares" name="total_hogares" value="{{ opp.total_hogares or '' }}">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="junta_directiva">Junta Directiva</label>
+                        <select id="junta_directiva" name="junta_directiva">
+                            <option value="SI" {% if opp.junta_directiva == 'SI' %}selected{% endif %}>SI</option>
+                            <option value="NO" {% if opp.junta_directiva == 'NO' %}selected{% endif %}>NO</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="clientes_interesados">Clientes Interesados</label>
+                        <input type="text" id="clientes_interesados" name="clientes_interesados" value="{{ opp.clientes_interesados or '' }}">
+                    </div>
+                </div>
+
+                <!-- 6. DETALLE TORRES -->
+                <div class="card col-12">
+                    <div class="card-title">📋 Configuración de Torres y Pisos</div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem;">
+                        <!-- Torre 1 -->
+                        <div style="background: rgba(15, 17, 26, 0.4); padding: 1.25rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.03);">
+                            <h4 style="margin-bottom: 1rem; color: #fff; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.5rem;">TORRE 1</h4>
+                            <div class="form-group">
+                                <label for="nombre_torre1">Nombre Torre</label>
+                                <input type="text" id="nombre_torre1" name="nombre_torre1" value="{{ opp.nombre_torre1 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="pisos_torre1">N° Pisos</label>
+                                <input type="text" id="pisos_torre1" name="pisos_torre1" value="{{ opp.pisos_torre1 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="hogares_torre1">Hogares Totales</label>
+                                <input type="text" id="hogares_torre1" name="hogares_torre1" value="{{ opp.hogares_torre1 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="hogares_por_piso_torre1">Hogares por Piso (Ej: 2,2,4,4...)</label>
+                                <input type="text" id="hogares_por_piso_torre1" name="hogares_por_piso_torre1" value="{{ opp.hogares_por_piso_torre1 or '' }}">
+                            </div>
+                        </div>
+
+                        <!-- Torre 2 -->
+                        <div style="background: rgba(15, 17, 26, 0.4); padding: 1.25rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.03);">
+                            <h4 style="margin-bottom: 1rem; color: #fff; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.5rem;">TORRE 2</h4>
+                            <div class="form-group">
+                                <label for="nombre_torre2">Nombre Torre</label>
+                                <input type="text" id="nombre_torre2" name="nombre_torre2" value="{{ opp.nombre_torre2 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="pisos_torre2">N° Pisos</label>
+                                <input type="text" id="pisos_torre2" name="pisos_torre2" value="{{ opp.pisos_torre2 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="hogares_torre2">Hogares Totales</label>
+                                <input type="text" id="hogares_torre2" name="hogares_torre2" value="{{ opp.hogares_torre2 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="hogares_por_piso_torre2">Hogares por Piso (Ej: 2,2,4,4...)</label>
+                                <input type="text" id="hogares_por_piso_torre2" name="hogares_por_piso_torre2" value="{{ opp.hogares_por_piso_torre2 or '' }}">
+                            </div>
+                        </div>
+
+                        <!-- Torre 3 -->
+                        <div style="background: rgba(15, 17, 26, 0.4); padding: 1.25rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.03);">
+                            <h4 style="margin-bottom: 1rem; color: #fff; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.5rem;">TORRE 3</h4>
+                            <div class="form-group">
+                                <label for="nombre_torre3">Nombre Torre</label>
+                                <input type="text" id="nombre_torre3" name="nombre_torre3" value="{{ opp.nombre_torre3 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="pisos_torre3">N° Pisos</label>
+                                <input type="text" id="pisos_torre3" name="pisos_torre3" value="{{ opp.pisos_torre3 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="hogares_torre3">Hogares Totales</label>
+                                <input type="text" id="hogares_torre3" name="hogares_torre3" value="{{ opp.hogares_torre3 or '' }}">
+                            </div>
+                            <div class="form-group">
+                                <label for="hogares_por_piso_torre3">Hogares por Piso (Ej: 2,2,4,4...)</label>
+                                <input type="text" id="hogares_por_piso_torre3" name="hogares_por_piso_torre3" value="{{ opp.hogares_por_piso_torre3 or '' }}">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 7. GESTION Y VISITA TECNICA -->
+                <div class="card col-4">
+                    <div class="card-title">📞 Gestión e Inspección Técnica</div>
+                    <div class="form-group">
+                        <label for="visita_inspeccion_tecnica">Fecha Inspección Técnica</label>
+                        <input type="text" id="visita_inspeccion_tecnica" name="visita_inspeccion_tecnica" value="{{ opp.visita_inspeccion_tecnica or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="rango_horario_visita">Rango Horario</label>
+                        <input type="text" id="rango_horario_visita" name="rango_horario_visita" value="{{ opp.rango_horario_visita or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="nombre_canal">Nombre Canal Hunting</label>
+                        <input type="text" id="nombre_canal" name="nombre_canal" value="{{ opp.nombre_canal or '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="gestor">Gestor Real</label>
+                        <input type="text" id="gestor" name="gestor" value="{{ opp.gestor or '' }}">
+                    </div>
+                </div>
+
+                <!-- 8. FOTO EDIFICIO -->
+                <div class="card col-4">
+                    <div class="card-title">📸 Foto del Edificio</div>
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100% - 2rem);">
+                        {% if opp.foto_edificio_path %}
+                            <!-- Cargamos localmente a través de la ruta del API del middleware -->
+                            {% set filename_edificio = opp.foto_edificio_path.replace('\\', '/').split('/')[-1] %}
+                            <img id="prev-foto-edificio" class="photo-preview" src="/api/cache/files/{{ filename_edificio }}" alt="Foto Edificio">
+                        {% elif opp.foto_edificio %}
+                            <img id="prev-foto-edificio" class="photo-preview" src="{{ opp.foto_edificio }}" alt="Foto Edificio">
+                        {% else %}
+                            <img id="prev-foto-edificio" class="photo-preview" style="display:none;" alt="Foto Edificio">
+                            <div id="placeholder-foto-edificio" style="padding: 2.5rem; text-align:center; color: var(--text-muted); font-size:0.85rem; border:1px dashed var(--border-color); border-radius:8px; margin-bottom:1rem; width:100%;">SIN FOTO</div>
+                        {% endif %}
+                        
+                        <div class="photo-upload-zone">
+                            <div class="upload-icon">📤</div>
+                            <span style="font-size:0.85rem; font-weight:600;">Reemplazar Imagen</span>
+                            <input type="file" id="foto_edificio" name="foto_edificio" accept="image/*">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 9. FOTO MONTANTES -->
+                <div class="card col-4">
+                    <div class="card-title">📸 Foto de Montantes</div>
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100% - 2rem);">
+                        {% if opp.foto_montantes_path %}
+                            {% set filename_montantes = opp.foto_montantes_path.replace('\\', '/').split('/')[-1] %}
+                            <img id="prev-foto-montantes" class="photo-preview" src="/api/cache/files/{{ filename_montantes }}" alt="Foto Montantes">
+                        {% elif opp.foto_montantes %}
+                            <img id="prev-foto-montantes" class="photo-preview" src="{{ opp.foto_montantes }}" alt="Foto Montantes">
+                        {% else %}
+                            <img id="prev-foto-montantes" class="photo-preview" style="display:none;" alt="Foto Montantes">
+                            <div id="placeholder-foto-montantes" style="padding: 2.5rem; text-align:center; color: var(--text-muted); font-size:0.85rem; border:1px dashed var(--border-color); border-radius:8px; margin-bottom:1rem; width:100%;">SIN FOTO</div>
+                        {% endif %}
+                        
+                        <div class="photo-upload-zone">
+                            <div class="upload-icon">📤</div>
+                            <span style="font-size:0.85rem; font-weight:600;">Reemplazar Imagen</span>
+                            <input type="file" id="foto_montantes" name="foto_montantes" accept="image/*">
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Botones flotantes -->
+            <div class="action-bar">
+                <button type="button" class="btn btn-secondary" onclick="window.close();">Cerrar</button>
+                <button type="submit" class="btn btn-primary" id="btn-save">
+                    <span class="spinner" id="spinner"></span>
+                    Guardar Cambios y Sincronizar
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // Previsualización de archivos subidos localmente
+        function setupPreview(inputId, imgId, placeholderId) {
+            document.getElementById(inputId).addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        const img = document.getElementById(imgId);
+                        img.src = evt.target.result;
+                        img.style.display = 'block';
+                        
+                        const placeholder = document.getElementById(placeholderId);
+                        if (placeholder) {
+                            placeholder.style.display = 'none';
+                        }
+                    }
+                    reader.readAsDataURL(file);
+                }
+            });
+        }
+
+        setupPreview('foto_edificio', 'prev-foto-edificio', 'placeholder-foto-edificio');
+        setupPreview('foto_montantes', 'prev-foto-montantes', 'placeholder-foto-montantes');
+
+        // Envío AJAX de los datos
+        document.getElementById('edit-ficha-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const btnSave = document.getElementById('btn-save');
+            const spinner = document.getElementById('spinner');
+            const alertSuccess = document.getElementById('alert-success');
+            const alertError = document.getElementById('alert-error');
+            
+            // Bloqueamos botón y activamos spinner
+            btnSave.disabled = true;
+            spinner.style.display = 'inline-block';
+            alertSuccess.style.display = 'none';
+            alertError.style.display = 'none';
+            
+            const formData = new FormData(this);
+            
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                btnSave.disabled = false;
+                spinner.style.display = 'none';
+                
+                if (data.status === 'success') {
+                    alertSuccess.innerText = data.message || 'Cambios guardados y sincronizados correctamente en GHL.';
+                    alertSuccess.style.display = 'block';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                } else {
+                    alertError.innerText = data.message || 'Ocurrió un error al guardar los datos.';
+                    alertError.style.display = 'block';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+            })
+            .catch(error => {
+                btnSave.disabled = false;
+                spinner.style.display = 'none';
+                alertError.innerText = 'Error de red: No se pudo conectar con el servidor.';
+                alertError.style.display = 'block';
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                console.error('Error:', error);
+            });
+        });
+    </script>
+</body>
+</html>

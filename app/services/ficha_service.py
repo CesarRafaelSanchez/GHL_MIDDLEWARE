@@ -19,10 +19,10 @@ requests = obtener_session_con_retries()
 # Esto encuentra la ruta de tu proyecto GHL_System automáticamente
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-CARPETA_SALIDAS = os.path.join(BASE_DIR, "archivos_datos", "salidas")
-CARPETA_TEMP = os.path.join(BASE_DIR, "archivos_datos", "temp")
-ARCHIVO_CACHE_FICHAS = os.path.join(BASE_DIR, "archivos_datos", "cache_fichas_datos.json")
-RUTA_PLANTILLA_FICHA_DATOS = os.path.join(BASE_DIR, "plantillas", "Ficha de Datos NOMBRE DEL PROYECTO - Junio.xlsx")
+CARPETA_SALIDAS = os.path.join(BASE_DIR, "storage", "exports")
+CARPETA_TEMP = os.path.join(BASE_DIR, "storage", "temp")
+ARCHIVO_CACHE_FICHAS = os.path.join(BASE_DIR, "storage", "cache_fichas_datos.json")
+RUTA_PLANTILLA_FICHA_DATOS = os.path.join(BASE_DIR, "resources", "templates", "Ficha de Datos NOMBRE DEL PROYECTO - Junio.xlsx")
 
 # Creamos las carpetas si no existen
 os.makedirs(CARPETA_SALIDAS, exist_ok=True)
@@ -50,52 +50,118 @@ def guardar_cache_fichas(cache):
 
 
 def guardar_datos_ficha_en_cache(nombre_proyecto, opp_id, contact_id, datos):
-    cache = cargar_cache_fichas()
-    clave_nombre = normalizar_clave_proyecto(nombre_proyecto)
-
-    datos_guardar = dict(datos)
-    datos_guardar["_opp_id"] = opp_id
-    datos_guardar["_contact_id"] = contact_id
-    datos_guardar["_nombre_proyecto"] = clave_nombre
-    datos_guardar["_guardado_en"] = datetime.now().isoformat()
-
-    if clave_nombre:
-        cache[f"nombre::{clave_nombre}"] = datos_guardar
-    if opp_id:
-        cache[f"opp::{opp_id}"] = datos_guardar
-    if contact_id:
-        cache[f"contact::{contact_id}"] = datos_guardar
-
-    guardar_cache_fichas(cache)
-    print(f"💾 [CACHE FICHA] Datos guardados para: {clave_nombre}")
+    from app.database import guardar_oportunidad_db
+    
+    # Mapeamos los datos simulando el flujo del webhook
+    datos_mapeados = construir_datos_ficha_desde_webhook(datos)
+    
+    # Incorporamos los campos de imágenes que se guardaron en la caché
+    if "foto_edificio_path" in datos:
+        datos_mapeados["foto_edificio_path"] = datos["foto_edificio_path"]
+    if "foto_montantes_path" in datos:
+        datos_mapeados["foto_montantes_path"] = datos["foto_montantes_path"]
+        
+    guardar_oportunidad_db(opp_id, contact_id, datos_mapeados, datos)
+    print(f"💾 [DB SAVE] Ficha guardada en SQLite para proyecto: {nombre_proyecto}")
 
 
 def recuperar_datos_ficha_de_cache(data):
-    cache = cargar_cache_fichas()
+    from app.database import obtener_oportunidad_db
+    
     opp_id = data.get("id")
     contact_id = data.get("contact_id") or data.get("contact", {}).get("id")
     nombre = data.get("cf_nombre_proyecto") or data.get("opportunity_name")
-    clave_nombre = normalizar_clave_proyecto(nombre)
-
-    posibles_claves = []
-    if opp_id:
-        posibles_claves.append(f"opp::{opp_id}")
-    if contact_id:
-        posibles_claves.append(f"contact::{contact_id}")
-    if clave_nombre:
-        posibles_claves.append(f"nombre::{clave_nombre}")
-
-    for clave in posibles_claves:
-        if clave in cache:
-            print(f"✅ [CACHE FICHA] Datos recuperados usando clave: {clave}")
-            datos_cache = cache[clave]
-            data_mezclada = dict(data)
-            data_mezclada.update(datos_cache)
-            data_mezclada["id"] = opp_id or datos_cache.get("_opp_id")
-            data_mezclada["contact_id"] = contact_id or datos_cache.get("_contact_id")
-            return data_mezclada
-
-    print("⚠️ [CACHE FICHA] No se encontraron datos completos en cache.")
+    
+    row = obtener_oportunidad_db(opp_id=opp_id, contact_id=contact_id, nombre_proyecto=nombre)
+    
+    if row:
+        print(f"✅ [DB READ] Datos recuperados de SQLite para Opp: {opp_id or row.get('oportunidad_id')}")
+        
+        # Deserializar raw_json original si existe
+        raw_json_str = row.get("raw_json")
+        base_dict = {}
+        if raw_json_str:
+            try:
+                base_dict = json.loads(raw_json_str)
+            except Exception:
+                pass
+                
+        # Mapa de columnas DB a campos GHL para sobrescribir con ediciones manuales
+        DB_COL_TO_GHL_KEY = {
+            "nombre_proyecto": "cf_nombre_proyecto",
+            "tipo_proyecto": "cf_tipo_proyecto",
+            "fuente_origen": "cf_fuente_hunting",
+            "clasificacion": "cf_clasificacion_proyecto",
+            "tipo_construccion": "cf_tipo_construccion_edificio",
+            "fecha_entrega_edificio": "cf_fecha_entrega_edificio_estreno",
+            "fecha_termino_montantes": "cf_fecha_termino_montantes_edificio_estreno",
+            "fecha_termino_mecha": "cf_fecha_termino_mecha_edificio_estreno",
+            "junta_directiva": "cf_junta_directiva",
+            "cargo_responsable": "cf_cargo_responsable_edificio",
+            "nombre_responsable": "cf_nombre_responsable_edificio",
+            "telefono_responsable": "cf_telefono_responsable_edificio",
+            "correo_responsable": "cf_correo_responsable_edificio",
+            "hogares_por_piso_torre1": "cf_hogares_por_piso_torre1",
+            "hogares_por_piso_torre2": "cf_hogares_por_piso_torre2",
+            "hogares_por_piso_torre3": "cf_hogares_por_piso_torre3",
+            "visita_inspeccion_tecnica": "cf_visita_inspeccion_tecnica_win",
+            "rango_horario_visita": "cf_rango_horario_visita_tecnica",
+            "departamento": "cf_departamento_edificio",
+            "provincia": "cf_provincia_edificio",
+            "distrito": "cf_distrito",
+            "urbanizacion": "cf_urbanizacion_edificio",
+            "codigo_postal": "cf_codigo_postal_edificio",
+            "tipo_via": "cf_tipo_via",
+            "nombre_via": "cf_nombre_via",
+            "numero_via": "cf_numeracion_via",
+            "coordenadas": "cf_coordenadas",
+            "total_torres": "cf_total_torres_proyecto",
+            "total_hogares": "cf_total_hogares_proyecto",
+            "nombre_torre1": "cf_nombre_torre1_proyecto",
+            "pisos_torre1": "cf_pisos_torre1_proyecto",
+            "hogares_torre1": "cf_hogares_torre1_proyecto",
+            "nombre_torre2": "cf_nombre_torre2_proyecto",
+            "pisos_torre2": "cf_pisos_torre2_proyecto",
+            "hogares_torre2": "cf_hogares_torre2_proyecto",
+            "nombre_torre3": "cf_nombre_torre3_proyecto",
+            "pisos_torre3": "cf_pisos_torre3_proyecto",
+            "hogares_torre3": "cf_hogares_torre3_proyecto",
+            "clientes_interesados": "cf_cantidad_clientes_interesados",
+            "nombre_canal": "cf_nombre_canal_hunting",
+            "gestor": "cf_gestor_real",
+            "foto_edificio": "cf_foto_edificio",
+            "foto_montantes": "cf_foto_montantes"
+        }
+        
+        # Sincronizamos las columnas de la DB al diccionario base
+        for col_name, val in row.items():
+            if col_name == "raw_json":
+                continue
+            # Mantener valor directo
+            base_dict[col_name] = val
+            
+            # Mapear a campo GHL si existe en el mapa
+            if col_name in DB_COL_TO_GHL_KEY:
+                base_dict[DB_COL_TO_GHL_KEY[col_name]] = val
+                
+            if col_name == "celular_gestor" and val:
+                if "user" not in base_dict or not isinstance(base_dict["user"], dict):
+                    base_dict["user"] = {}
+                base_dict["user"]["phone"] = val
+                
+        # Las fotos locales se copian directamente
+        base_dict["foto_edificio_path"] = row.get("foto_edificio_path")
+        base_dict["foto_montantes_path"] = row.get("foto_montantes_path")
+        
+        # Mezclamos con el payload de entrada (los datos de nuestra base de datos local sobreescriben al webhook de GHL)
+        data_mezclada = dict(data)
+        data_mezclada.update(base_dict)
+        data_mezclada["id"] = opp_id or row.get("oportunidad_id")
+        data_mezclada["contact_id"] = contact_id or row.get("contacto_id")
+        
+        return data_mezclada
+        
+    print("⚠️ [DB READ] No se encontraron datos para la oportunidad en SQLite.")
     return data
 
 

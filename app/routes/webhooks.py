@@ -1,8 +1,11 @@
 import os
+import json
+import hmac
+import hashlib
 from flask import Blueprint, request, jsonify
 
 # Importamos tus herramientas y servicios modularizados
-from app.utils.helpers import obtener_campo, extraer_custom_fields_para_ghl, obtener_session_con_retries
+from app.utils.helpers import obtener_campo, extraer_custom_fields_para_ghl, obtener_session_con_retries, obtener_mapa_keys_a_ids
 from app.services.email_smtp import enviar_correo_win, enviar_correo_ficha_datos_win
 from app.services.ficha_service import (
     guardar_datos_ficha_en_cache,
@@ -64,16 +67,21 @@ def webhook_formulario1():
 
     print(f"🚀 [FORM 1] Iniciando creación Génesis para: {nombre_proyecto}")
 
-    res_search = requests.get(
-        f"https://services.leadconnectorhq.com/opportunities/search?location_id={LOCATION_ID}&q={nombre_proyecto}",
-        headers=HEADERS_GHL
-    )
-    if res_search.status_code == 200:
-        resultados = res_search.json().get("opportunities", [])
-        opp_existente = next((opp for opp in resultados if opp.get("pipelineId") == PIPELINE_ID), None)
-        if opp_existente:
-            print(f"⚠️ [FORM 1] El proyecto '{nombre_proyecto}' ya existe. Evitando creación duplicada.")
-            return jsonify({"status": "ignored", "message": "El proyecto ya existe"}), 200
+    opp_existente = None
+    try:
+        res_search = requests.get(
+            f"https://services.leadconnectorhq.com/opportunities/search?location_id={LOCATION_ID}&q={nombre_proyecto}",
+            headers=HEADERS_GHL
+        )
+        if res_search.status_code == 200:
+            resultados = res_search.json().get("opportunities", [])
+            opp_existente = next((opp for opp in resultados if opp.get("pipelineId") == PIPELINE_ID), None)
+    except Exception as e:
+        print(f"⚠️ [FORM 1] Error o timeout al buscar oportunidad '{nombre_proyecto}': {e}. Continuamos con la creación...")
+
+    if opp_existente:
+        print(f"⚠️ [FORM 1] El proyecto '{nombre_proyecto}' ya existe. Evitando creación duplicada.")
+        return jsonify({"status": "ignored", "message": "El proyecto ya existe"}), 200
 
     owner_id = USERS_GHL["JEAN"] if "JEAN" in ejecutivo_str else USERS_GHL["YASMIN"]
 
@@ -190,6 +198,14 @@ def webhook_formulario2():
     contacto_original_id = oportunidad_correcta.get("contactId")
     custom_fields_nuevos = extraer_custom_fields_para_ghl(datos)
 
+    # Generamos enlace de edición y lo añadimos a los custom fields
+    enlace_edicion = generar_enlace_edicion(opp_id)
+    mapa_ids = obtener_mapa_keys_a_ids()
+    field_id_enlace = mapa_ids.get("cf_enlace_edicion_ficha") or "cf_enlace_edicion_ficha"
+    
+    custom_fields_nuevos = [cf for cf in custom_fields_nuevos if cf.get("id") != field_id_enlace]
+    custom_fields_nuevos.append({"id": field_id_enlace, "value": enlace_edicion})
+
     contacto_fantasma_id = datos.get("contact_id") or datos.get("contact", {}).get("id")
     eliminar_fantasma = False
     if contacto_fantasma_id and contacto_fantasma_id != contacto_original_id:
@@ -224,25 +240,56 @@ def webhook_formulario2():
     codigo_postal = obtener_campo(datos, "cf_codigo_postal_edificio") or ""
 
     res_get_contact = requests.get(f"https://services.leadconnectorhq.com/contacts/{contacto_original_id}", headers=HEADERS_GHL)
-    company_id = res_get_contact.json().get("contact", {}).get("companyId") if res_get_contact.status_code == 200 else None
+    company_id = (res_get_contact.json().get("contact", {}).get("businessId") or res_get_contact.json().get("contact", {}).get("companyId")) if res_get_contact.status_code == 200 else None
 
+    # Preparamos payload de la compañía (Business)
+    company_payload = {
+        "locationId": LOCATION_ID,
+        "name": nombre_proyecto,
+        "address": direccion_completa,
+        "city": distrito if distrito else (ciudad if ciudad else "Lima"),
+        "state": estado if estado else "Lima",
+        "postalCode": codigo_postal,
+        "country": "PE"
+    }
+    if resp_tel:
+        company_payload["phone"] = resp_tel
+    if resp_correo:
+        company_payload["email"] = resp_correo
+
+    HEADERS_GHL_BUSINESSES = {
+        "Authorization": f"Bearer {GHL_TOKEN}",
+        "Version": "2023-02-21",
+        "Content-Type": "application/json"
+    }
+
+    new_company_id = None
     if company_id:
-        company_payload = {
-            "locationId": LOCATION_ID,
-            "name": nombre_proyecto,
-            "address": direccion_completa,
-            "city": ciudad,
-            "state": estado,
-            "postalCode": codigo_postal,
-            "country": "Peru"
-        }
-        if resp_tel:
-            company_payload["phone"] = resp_tel
-        requests.put(
-            f"https://services.leadconnectorhq.com/companies/{company_id}",
-            headers=HEADERS_GHL,
-            json=company_payload
-        )
+        # Actualizamos la compañía (Business) existente
+        try:
+            update_payload = dict(company_payload)
+            update_payload.pop("locationId", None)
+            requests.put(
+                f"https://services.leadconnectorhq.com/businesses/{company_id}",
+                headers=HEADERS_GHL_BUSINESSES,
+                json=update_payload
+            )
+        except Exception as e:
+            print(f"⚠️ [FORM 2] Error al actualizar compañía (Business): {e}")
+    else:
+        # Creamos la compañía nueva (Business)
+        try:
+            res_comp = requests.post(
+                "https://services.leadconnectorhq.com/businesses/",
+                headers=HEADERS_GHL_BUSINESSES,
+                json=company_payload
+            )
+            if res_comp.status_code in [200, 201]:
+                resp_json = res_comp.json()
+                new_company_id = resp_json.get("id") or resp_json.get("business", {}).get("id")
+                print(f"👻 [FORM 2] Nueva compañía (Business) creada para contacto {contacto_original_id}. ID: {new_company_id}")
+        except Exception as e:
+            print(f"⚠️ [FORM 2] Error al crear compañía: {e}")
 
     res_opp_update = requests.put(
         f"https://services.leadconnectorhq.com/opportunities/{opp_id}",
@@ -251,16 +298,27 @@ def webhook_formulario2():
     )
     print(f"🔄 [FORM 2] Oportunidad {opp_id} actualizada. Status: {res_opp_update.status_code}")
 
+    # Dividimos el nombre del responsable para guardar Nombre y Apellidos estándar
+    if resp_nombre:
+        parts = resp_nombre.strip().split(" ", 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ""
+    else:
+        first_name = "Administración:"
+        last_name = ""
+
     # Intentamos actualizar el contacto original omitiendo campos vacíos para evitar error 422
     contact_payload = {
-        "firstName": resp_nombre if resp_nombre else "Administración:",
-        "lastName": nombre_proyecto,
+        "firstName": first_name,
+        "lastName": last_name,
         "customFields": custom_fields_nuevos
     }
     if resp_correo:
         contact_payload["email"] = resp_correo
     if resp_tel:
         contact_payload["phone"] = resp_tel
+    if new_company_id:
+        contact_payload["companyId"] = new_company_id
 
     res_contact = requests.put(
         f"https://services.leadconnectorhq.com/contacts/{contacto_original_id}",
@@ -434,21 +492,40 @@ def webhook_enviar_ficha_datos_win():
 # =========================================================
 @webhooks_bp.route('/api/cache/<identifier>', methods=['GET'])
 def obtener_cache_api(identifier):
-    from app.services.ficha_service import cargar_cache_fichas, normalizar_clave_proyecto
+    from app.database import obtener_oportunidad_db
+    import json
     try:
-        cache = cargar_cache_fichas()
-        posibles_claves = [
-            f"opp::{identifier}",
-            f"contact::{identifier}",
-            f"nombre::{normalizar_clave_proyecto(identifier)}"
-        ]
-        for clave in posibles_claves:
-            if clave in cache:
-                print(f"[OK] [API CACHE] Enviando datos a bot para clave: {clave}", flush=True)
-                return jsonify(cache[clave]), 200
-        return jsonify({"error": "No encontrado en caché"}), 404
+        # Intentamos obtener por oportunidad_id
+        row = obtener_oportunidad_db(opp_id=identifier)
+        # Si no, por contacto_id
+        if not row:
+            row = obtener_oportunidad_db(contact_id=identifier)
+        # Si no, por nombre_proyecto
+        if not row:
+            row = obtener_oportunidad_db(nombre_proyecto=identifier)
+            
+        if row:
+            resp_dict = {}
+            if row.get("raw_json"):
+                try:
+                    resp_dict = json.loads(row["raw_json"])
+                except Exception:
+                    pass
+            # Incorporamos las columnas de la base de datos al diccionario de respuesta
+            for k, v in row.items():
+                if k != "raw_json":
+                    resp_dict[k] = v
+                    if k == "foto_edificio" and v:
+                        resp_dict["cf_foto_edificio"] = v
+                    if k == "foto_montantes" and v:
+                        resp_dict["cf_foto_montantes"] = v
+                        
+            print(f"[OK] [API CACHE DB] Enviando datos a bot para identificador: {identifier}", flush=True)
+            return jsonify(resp_dict), 200
+            
+        return jsonify({"error": "No encontrado en caché de base de datos"}), 404
     except Exception as e:
-        print("[ERROR] [API CACHE] Error:", str(e), flush=True)
+        print("[ERROR] [API CACHE DB] Error:", str(e), flush=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -460,4 +537,175 @@ def obtener_archivo_cache(filename):
         return send_from_directory(CARPETA_TEMP, filename)
     except Exception as e:
         print(f"[ERROR] [API CACHE FILE] Error al servir {filename}: {e}", flush=True)
-        return jsonify({"error": "Archivo no encontrado"}), 404
+        return jsonify({"error": "Archivo no encontrado"}), 404
+
+
+@webhooks_bp.route('/api/disponibilidad', methods=['GET'])
+def consultar_disponibilidad_api():
+    query_str = request.args.get("q", "").strip()
+    if not query_str:
+        return jsonify([]), 200
+        
+    from app.database import get_db_connection
+    import json
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Búsqueda parcial (case-insensitive LIKE) en nombre y dirección
+        sql_query = """
+            SELECT nombre_proyecto, tipo_via, nombre_via, numero_via, urbanizacion, distrito, gestor, raw_json 
+            FROM oportunidades_ficha 
+            WHERE nombre_proyecto LIKE ? 
+               OR nombre_via LIKE ? 
+               OR urbanizacion LIKE ? 
+               OR distrito LIKE ?
+        """
+        like_pattern = f"%{query_str}%"
+        cursor.execute(sql_query, (like_pattern, like_pattern, like_pattern, like_pattern))
+        rows = cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            raw_data = {}
+            if row["raw_json"]:
+                try:
+                    raw_data = json.loads(row["raw_json"])
+                except Exception:
+                    pass
+            # Extraemos supervisor y ejecutivo de raw_json
+            supervisor = raw_data.get("cf_supervisor_hunting") or raw_data.get("cf_supervisor") or ""
+            ejecutivo = raw_data.get("cf_ejecutivo_principal") or raw_data.get("cf_ejecutivo") or ""
+            
+            results.append({
+                "nombre_proyecto": row["nombre_proyecto"],
+                "tipo_via": row["tipo_via"],
+                "nombre_via": row["nombre_via"],
+                "numero_via": row["numero_via"],
+                "urbanizacion": row["urbanizacion"],
+                "distrito": row["distrito"],
+                "gestor": row["gestor"],
+                "supervisor": supervisor,
+                "ejecutivo": ejecutivo
+            })
+        return jsonify(results), 200
+    except Exception as e:
+        print(f"❌ [API DISPONIBILIDAD] Error: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+# =========================================================
+# RUTAS DE EDICIÓN DEL PANEL WEB PARA BACKOFFICE
+# =========================================================
+
+def generar_enlace_edicion(oportunidad_id):
+    import hmac, hashlib
+    secret = os.getenv("FLASK_SECRET_KEY") or os.getenv("GHL_ACCESS_TOKEN") or "super-secret-key-fallback"
+    token = hmac.new(secret.encode('utf-8'), oportunidad_id.encode('utf-8'), hashlib.sha256).hexdigest()
+    base_url = os.getenv("MIDDLEWARE_URL") or "https://webhook.novacoresac.com"
+    return f"{base_url}/ficha/editar/{oportunidad_id}?token={token}"
+
+def verificar_enlace_edicion(oportunidad_id, token_recibido):
+    import hmac, hashlib
+    if not token_recibido:
+        return False
+    secret = os.getenv("FLASK_SECRET_KEY") or os.getenv("GHL_ACCESS_TOKEN") or "super-secret-key-fallback"
+    expected_token = hmac.new(secret.encode('utf-8'), oportunidad_id.encode('utf-8'), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(token_recibido, expected_token)
+
+
+@webhooks_bp.route('/ficha/editar/<opp_id>', methods=['GET'])
+def render_editar_ficha(opp_id):
+    from flask import render_template
+    from app.database import obtener_oportunidad_db
+    
+    token = request.args.get("token")
+    if not verificar_enlace_edicion(opp_id, token):
+        return "⚠️ Acceso Denegado: Enlace expirado o firma inválida.", 403
+        
+    opp_data = obtener_oportunidad_db(opp_id=opp_id)
+    if not opp_data:
+        return "⚠️ Oportunidad no encontrada en el sistema.", 404
+        
+    return render_template("edit_ficha.html", opp=opp_data)
+
+
+@webhooks_bp.route('/ficha/editar/<opp_id>', methods=['POST'])
+def procesar_editar_ficha(opp_id):
+    from app.database import obtener_oportunidad_db, guardar_oportunidad_db
+    from app.services.ghl_api import update_ghl_contact_fields
+    from app.services.ficha_service import descargar_imagen, limpiar_nombre_archivo
+    
+    token = request.args.get("token")
+    if not verificar_enlace_edicion(opp_id, token):
+        return jsonify({"status": "error", "message": "Acceso Denegado: Token inválido."}), 403
+        
+    opp_data = obtener_oportunidad_db(opp_id=opp_id)
+    if not opp_data:
+        return jsonify({"status": "error", "message": "Oportunidad no encontrada."}), 404
+        
+    # Leemos todos los campos del formulario post
+    campos_editados = request.form.to_dict()
+    
+    # Procesamos las nuevas fotos si fueron cargadas
+    foto_edificio_file = request.files.get("foto_edificio")
+    foto_montantes_file = request.files.get("foto_montantes")
+    
+    nombre_limpio = limpiar_nombre_archivo(campos_editados.get("nombre_proyecto") or opp_data.get("nombre_proyecto") or "proyecto")
+    
+    # Si subió una foto de edificio nueva
+    if foto_edificio_file and foto_edificio_file.filename:
+        from app.services.ficha_service import CARPETA_TEMP
+        path_local = os.path.join(CARPETA_TEMP, f"{nombre_limpio}_foto_edificio.jpg")
+        foto_edificio_file.save(path_local)
+        
+        opp_data["foto_edificio_path"] = path_local
+        base_url = os.getenv("MIDDLEWARE_URL") or "https://webhook.novacoresac.com"
+        opp_data["foto_edificio"] = f"{base_url}/api/cache/files/{nombre_limpio}_foto_edificio.jpg"
+        print(f"📸 [POST EDIT] Reemplazada foto edificio local: {path_local}", flush=True)
+        
+    # Si subió una foto de montantes nueva
+    if foto_montantes_file and foto_montantes_file.filename:
+        from app.services.ficha_service import CARPETA_TEMP
+        path_local = os.path.join(CARPETA_TEMP, f"{nombre_limpio}_foto_montantes.jpg")
+        foto_montantes_file.save(path_local)
+        
+        opp_data["foto_montantes_path"] = path_local
+        base_url = os.getenv("MIDDLEWARE_URL") or "https://webhook.novacoresac.com"
+        opp_data["foto_montantes"] = f"{base_url}/api/cache/files/{nombre_limpio}_foto_montantes.jpg"
+        print(f"📸 [POST EDIT] Reemplazada foto montantes local: {path_local}", flush=True)
+
+    # Actualizamos el resto de los campos de texto
+    for k, v in campos_editados.items():
+        opp_data[k] = v
+        
+    # Recuperamos el raw_json original y lo actualizamos con los nuevos campos para consistencia de fallback
+    raw_json_str = opp_data.get("raw_json")
+    raw_json_dict = {}
+    if raw_json_str:
+        try:
+            raw_json_dict = json.loads(raw_json_str)
+        except Exception:
+            pass
+            
+    # Mapeamos los campos del formulario de vuelta al raw_json con el prefijo cf_
+    from app.services.ghl_api import DB_COL_TO_GHL_KEY
+    for k, v in campos_editados.items():
+        if k in DB_COL_TO_GHL_KEY:
+            raw_json_dict[DB_COL_TO_GHL_KEY[k]] = v
+            
+    # Guardamos en base de datos SQLite
+    guardar_oportunidad_db(opp_id, opp_data.get("contacto_id"), opp_data, raw_json_dict)
+    
+    # 🚀 SINCRONIZACIÓN INVERSA A GHL
+    campos_sincronizar = dict(campos_editados)
+    campos_sincronizar.pop("foto_edificio", None)
+    campos_sincronizar.pop("foto_montantes", None)
+    
+    sync_exito = update_ghl_contact_fields(opp_data.get("contacto_id"), campos_sincronizar)
+    
+    if sync_exito:
+        return jsonify({"status": "success", "message": "Cambios guardados localmente y sincronizados con GHL exitosamente."}), 200
+    else:
+        return jsonify({"status": "success", "message": "Cambios guardados localmente pero falló la sincronización visual inmediata con GHL (se reintentará en el Paso 4)."}), 200

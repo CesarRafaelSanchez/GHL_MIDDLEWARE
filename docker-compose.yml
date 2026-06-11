@@ -8,6 +8,6 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ./archivos_datos:/app/archivos_datos
+      - ./storage:/app/storage
     env_file:
       - .env

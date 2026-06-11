@@ -106,13 +106,18 @@ def extraer_custom_fields_para_ghl(datos_formulario):
                 cf_array.append({"id": field_id, "value": valor_limpio})
     return cf_array
 
-
 def obtener_session_con_retries():
     import requests
     from requests.adapters import HTTPAdapter
     from urllib3.util import Retry
 
-    session = requests.Session()
+    class TimeoutSession(requests.Session):
+        def request(self, *args, **kwargs):
+            if 'timeout' not in kwargs:
+                kwargs['timeout'] = 20
+            return super().request(*args, **kwargs)
+
+    session = TimeoutSession()
     retries = Retry(
         total=3,
         backoff_factor=0.5,
@@ -122,4 +127,5 @@ def obtener_session_con_retries():
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    return session
+    return session
+

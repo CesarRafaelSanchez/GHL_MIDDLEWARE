@@ -1,8 +1,12 @@
 from flask import Flask
 from app.routes.webhooks import webhooks_bp
+from app.database import init_db
 
 
 def create_app():
+    # Inicializamos la base de datos y ejecutamos migraciones si aplica
+    init_db()
+
     # Creamos la aplicación principal
     app = Flask(__name__)
 

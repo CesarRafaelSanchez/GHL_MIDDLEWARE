@@ -32,6 +32,7 @@ htmlcov/
 Thumbs.db
 
 # Local data and cache (prevent pushing heavy files or contact caches)
-archivos_datos/cache_fichas_datos.json
-archivos_datos/salidas/
-archivos_datos/temp/
+storage/cache_fichas_datos.json
+storage/exports/
+storage/temp/
+storage/ghl_system.db
