@@ -36,3 +36,6 @@ storage/cache_fichas_datos.json
 storage/exports/
 storage/temp/
 storage/ghl_system.db
+*.xlsx
+scripts/checked_contacts.json
+scripts/*.txt

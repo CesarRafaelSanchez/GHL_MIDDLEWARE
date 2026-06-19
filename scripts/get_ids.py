@@ -14,9 +14,9 @@ response = requests.get(url, headers=headers)
 if response.status_code == 200:
     pipelines = response.json().get("pipelines", [])
     for pipe in pipelines:
-        print(f"\n🚀 PIPELINE: {pipe.get('name')} | ID: {pipe.get('id')}")
+        print(f"\n[PIPELINE] {pipe.get('name')} | ID: {pipe.get('id')}")
         print("-" * 50)
         for stage in pipe.get("stages", []):
-            print(f"   ➔ STAGE: {stage.get('name')} | ID: {stage.get('id')}")
+            print(f"   -> STAGE: {stage.get('name')} | ID: {stage.get('id')}")
 else:
-    print("❌ Error:", response.text)
+    print("Error:", response.text)

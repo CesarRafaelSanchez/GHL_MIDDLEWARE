@@ -38,11 +38,29 @@ HEADERS_GHL = {
     "Content-Type": "application/json"
 }
 
-USERS_GHL = {
-    "JEAN": "UzEVMjDvEHlw6YUAj3aJ",
-    "YASMIN": "bVGkAziqy6vwDoFbqvr6",
-    "STEFANO_BO": "6u8iZhDXnxp0xSp7XfDl"
-}
+def cargar_usuarios_ghl():
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ruta_json = os.path.join(base_dir, "usuarios.json")
+    try:
+        with open(ruta_json, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ Error cargando usuarios.json: {e}", flush=True)
+        return {}
+
+ID_STEFANO = "6u8iZhDXnxp0xSp7XfDl"
+
+EQUIPO_NOVACORE = [
+    "Carmen Yanagui Uribe",
+    "Karlo Gabriel Dominguez Chavez",
+    "Rubén Dario Bastardo Rivera",
+    "Lorena Lizet Segura Solis",
+    "Alex Aldair Correa Peralta",
+    "Victor Enrique Urrunaga Solis",
+    "Mario Eugenio Murgado Blas",
+    "Isabel Milagros Miranda Castillo",
+    "Stephany Anthuaneth Arias Quiroz"
+]
 
 
 # =========================================================
@@ -78,20 +96,80 @@ def webhook_formulario1():
             opp_existente = next((opp for opp in resultados if opp.get("pipelineId") == PIPELINE_ID), None)
     except Exception as e:
         print(f"⚠️ [FORM 1] Error o timeout al buscar oportunidad '{nombre_proyecto}': {e}. Continuamos con la creación...")
-
     if opp_existente:
         print(f"⚠️ [FORM 1] El proyecto '{nombre_proyecto}' ya existe. Evitando creación duplicada.")
         return jsonify({"status": "ignored", "message": "El proyecto ya existe"}), 200
 
-    owner_id = USERS_GHL["JEAN"] if "JEAN" in ejecutivo_str else USERS_GHL["YASMIN"]
+    mapa_usuarios = cargar_usuarios_ghl()
+    owner_id = None
+    ejecutivo_limpio = ejecutivo_str.strip().upper()
+
+    # 1. Determinar el Tipo de Ingreso y agregar tags de Origen correspondientes
+    tipo_ingreso_raw = str(obtener_campo(datos, "cf_tipo_ingreso")).strip().upper()
+    
+    tag_origen = None
+    if "FUTURA" in tipo_ingreso_raw:
+        tag_origen = "FUTURA"
+    elif "NOVACORE" in tipo_ingreso_raw:
+        tag_origen = "NOVACORE"
+    elif "REFERIDO" in tipo_ingreso_raw:
+        tag_origen = "REFERIDO"
 
     tags_contacto = [
         "NUEVO HUNTING",
         f"Origen: {tipo_ingreso}" if tipo_ingreso != "None" else "Origen: No Especificado",
         f"Distrito: {distrito}" if distrito != "None" else "Distrito: No Especificado",
-        "Hunter: Jean" if owner_id == USERS_GHL["JEAN"] else "Hunter: Yasmin",
         "Trigger_Notificacion_BO"
     ]
+    
+    if tag_origen:
+        tags_contacto.append(tag_origen)
+
+    # 2. Determinar el Ejecutivo y manejo de Fallback BO / Asignación
+    is_bo_fallback = "BO (" in ejecutivo_limpio
+
+    if is_bo_fallback:
+        if tag_origen == "NOVACORE":
+            owner_id = "jIX0i1eicDNv2KQDAmRq" # Alexander Watson Huamani (BO Novacore)
+            ejecutivo_str = "Alexander Watson Huamani"
+            print(f"💼 [FORM 1] Ejecutivo BO detectado para Novacore. Asignando a Alexander Watson Huamani.")
+        else:
+            owner_id = ID_STEFANO # Stefano Sotomarino Goche (BO Futura / Fallback)
+            ejecutivo_str = "Stefano Sotomarino Goche Back Office"
+            print(f"💼 [FORM 1] Ejecutivo BO detectado. Asignando a Stefano Sotomarino Goche.")
+        tags_contacto.append("BO Revision")
+    else:
+        # Búsqueda tolerante en usuarios.json
+        for nombre_key, ghl_id in mapa_usuarios.items():
+            nombre_key_limpio = nombre_key.strip().upper()
+            if nombre_key_limpio == ejecutivo_limpio or ejecutivo_limpio in nombre_key_limpio or nombre_key_limpio in ejecutivo_limpio:
+                owner_id = ghl_id
+                # Corregimos el ejecutivo_str para que tenga el casing correcto del JSON
+                ejecutivo_str = nombre_key 
+                break
+
+        if not owner_id:
+            print(f"⚠️ [FORM 1] Ejecutivo '{ejecutivo_str}' no encontrado en usuarios.json. Asignando a Fallback (Stefano).")
+            owner_id = ID_STEFANO
+            tags_contacto.append("⚠️ Usuario No Encontrado")
+        else:
+            # Fallback secundario si el origen no se seleccionó en el dropdown, pero el ejecutivo es de Novacore
+            if not tag_origen:
+                for miembro in EQUIPO_NOVACORE:
+                    if miembro.lower() in ejecutivo_str.lower() or ejecutivo_str.lower() in miembro.lower():
+                        tags_contacto.append("NOVACORE")
+                        break
+
+    # 3. Sincronizar el Ejecutivo y Gestor Real resueltos en customFields para GHL
+    mapa_ids = obtener_mapa_keys_a_ids()
+    id_gestor_real = mapa_ids.get("cf_gestor_real") or "cf_gestor_real"
+    id_ejecutivo = mapa_ids.get("cf_ejecutivo_principal") or "cf_ejecutivo_principal"
+    
+    # Remove existing entries for these two custom fields if they exist
+    custom_fields = [cf for cf in custom_fields if cf.get("id") not in [id_gestor_real, id_ejecutivo]]
+    # Add resolved/mapped values
+    custom_fields.append({"id": id_ejecutivo, "value": ejecutivo_str})
+    custom_fields.append({"id": id_gestor_real, "value": ejecutivo_str})
 
     contact_id = datos.get("contact_id") or datos.get("contact", {}).get("id")
 
@@ -160,10 +238,41 @@ def webhook_formulario1():
         requests.post(
             f"https://services.leadconnectorhq.com/opportunities/{opp_id}/followers",
             headers=HEADERS_GHL,
-            json={"followers": [USERS_GHL["STEFANO_BO"]]}
+            json={"followers": [ID_STEFANO]}
         )
+        
+        try:
+            datos_db = dict(datos)
+            datos_db["opportunity_name"] = nombre_proyecto
+            datos_db["cf_nombre_proyecto"] = nombre_proyecto
+            datos_db["cf_gestor_real"] = ejecutivo_str
+            datos_db["cf_ejecutivo_principal"] = ejecutivo_str
+            
+            from app.database import guardar_oportunidad_db
+            from app.services.ficha_service import construir_datos_ficha_desde_webhook
+            datos_mapeados = construir_datos_ficha_desde_webhook(datos_db)
+            
+            # Mapear campos de dirección si están presentes en la entrada
+            if obtener_campo(datos, "cf_distrito"):
+                datos_mapeados["distrito"] = obtener_campo(datos, "cf_distrito")
+            if obtener_campo(datos, "cf_tipo_via"):
+                datos_mapeados["tipo_via"] = obtener_campo(datos, "cf_tipo_via")
+            if obtener_campo(datos, "cf_nombre_via"):
+                datos_mapeados["nombre_via"] = obtener_campo(datos, "cf_nombre_via")
+            if obtener_campo(datos, "cf_numeracion_via"):
+                datos_mapeados["numero_via"] = obtener_campo(datos, "cf_numeracion_via")
+            if obtener_campo(datos, "cf_coordenadas"):
+                datos_mapeados["coordenadas"] = obtener_campo(datos, "cf_coordenadas")
+                
+            # Sobrescribimos el gestor con el ejecutivo_str mapeado
+            datos_mapeados["gestor"] = ejecutivo_str
+                
+            guardar_oportunidad_db(opp_id, contact_id, datos_mapeados, datos_db)
+            print(f"💾 [DB SAVE] Oportunidad Genesis guardada en SQLite: {nombre_proyecto}", flush=True)
+        except Exception as e:
+            print(f"⚠️ [DB SAVE] Error guardando oportunidad Genesis: {e}", flush=True)
 
-    print(f"✅ [FORM 1] Setup completado. Asignado a: {'Jean' if owner_id == USERS_GHL['JEAN'] else 'Yasmin'}")
+    print(f"✅ [FORM 1] Setup completado. Asignado a: {ejecutivo_str}")
     return jsonify({"status": "success"}), 200
 
 
@@ -318,7 +427,7 @@ def webhook_formulario2():
     if resp_tel:
         contact_payload["phone"] = resp_tel
     if new_company_id:
-        contact_payload["companyId"] = new_company_id
+        contact_payload["businessId"] = new_company_id
 
     res_contact = requests.put(
         f"https://services.leadconnectorhq.com/contacts/{contacto_original_id}",
@@ -328,7 +437,7 @@ def webhook_formulario2():
 
     # Si GHL rechaza por duplicados (400), reintentamos la actualización sin los campos de identidad
     if res_contact.status_code == 400 and "duplicated" in res_contact.text.lower():
-        print("⚠️ [FORM 2] GHL bloqueó actualización por duplicación de email/teléfono. Reintentando actualización sin campos de identidad...")
+        print("⚠️ [FORM 2] GHL bloqueó actualización por duplicación de email/teléfono. Reintentando actualización sin campos de identidad...", flush=True)
         contact_payload.pop("email", None)
         contact_payload.pop("phone", None)
         res_contact = requests.put(
@@ -337,7 +446,22 @@ def webhook_formulario2():
             json=contact_payload
         )
 
-    print(f"🔄 [FORM 2] Contacto original {contacto_original_id} actualizado. Status: {res_contact.status_code}")
+    if res_contact.status_code == 422:
+        print(f"⚠️ [FORM 2] GHL rechazó el payload del contacto (422). Respuesta: {res_contact.text}", flush=True)
+        print("⚠️ [FORM 2] Intentando actualizar contacto SIN custom fields...", flush=True)
+        contact_payload.pop("customFields", None)
+        res_contact = requests.put(
+            f"https://services.leadconnectorhq.com/contacts/{contacto_original_id}",
+            headers=HEADERS_GHL,
+            json=contact_payload
+        )
+
+    if res_contact.status_code in [200, 201]:
+        print(f"✅ [FORM 2] Contacto {contacto_original_id} actualizado. Status: {res_contact.status_code}", flush=True)
+    else:
+        print(f"❌ [FORM 2] Falló al actualizar contacto {contacto_original_id}. Status: {res_contact.status_code}, Error: {res_contact.text}", flush=True)
+    if res_contact.status_code not in [200, 201]:
+        print(f"❌ [FORM 2] Error al actualizar contacto: {res_contact.text}", flush=True)
 
     guardar_datos_ficha_en_cache(
         nombre_proyecto=nombre_proyecto,
